@@ -1515,6 +1515,12 @@ void create_bit_torrent_peer(
         return false;
     }
 
+    // incoming peers arrive on the session's sockets, which carry only the session's bind_interface
+    if (result.io->is_incoming() && !swarm->tor->bind_interface_matches_session())
+    {
+        return false;
+    }
+
     if (!result.is_connected)
     {
         // A connection born from a holepunch (uTP rendezvous) must not itself
@@ -2450,6 +2456,12 @@ void close_torrent_connections_impl(tr_torrent const* const tor)
 
     auto peers = tor->swarm->peers;
     std::ranges::for_each(peers, close_peer);
+
+    // outgoing handshakes still use sockets opened under the previous bind_interface
+    for (auto& [socket_address, peer_info] : tor->swarm->connectable_pool)
+    {
+        peer_info->destroy_handshake();
+    }
 }
 
 constexpr struct
@@ -2564,6 +2576,7 @@ void tr_peerMgr::close_connections()
 
     auto const lock = unique_lock();
     outbound_candidates_.clear();
+    incoming_handshakes.clear();
 
     for (auto* const tor : torrents_)
     {

@@ -274,10 +274,6 @@ void tr_ip_cache::update_global_addr(tr_address_type const type) noexcept
     options.ip_proto = IPProtocolMap[type];
     options.sndbuf = 4096;
     options.rcvbuf = 4096;
-    if (auto const bind_interface = mediator_.settings_bind_interface(); !tr_net_interface_is_default(bind_interface))
-    {
-        options.bind_interface = std::string{ bind_interface };
-    }
     mediator_.fetch(std::move(options));
 }
 

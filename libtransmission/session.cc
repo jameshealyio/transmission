@@ -844,6 +844,12 @@ void tr_session::setSettings(tr_session::Settings&& settings_in, bool force)
 
     bool const interface_changed = new_settings.bind_interface != old_settings.bind_interface;
 
+    if (force || interface_changed)
+    {
+        // first, so that the requests made below start under the new setting
+        web_->on_bind_interface_changed();
+    }
+
     if (auto const& val = new_settings.bind_address_ipv4; force || interface_changed || val != old_settings.bind_address_ipv4)
     {
         ip_cache_->update_addr(TR_AF_INET);

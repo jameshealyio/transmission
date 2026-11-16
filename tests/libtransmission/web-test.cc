@@ -8,6 +8,8 @@
 #include <cstdlib> // std::abort()
 #include <future>
 #include <iostream>
+#include <optional>
+#include <string>
 #include <thread>
 #include <utility>
 
@@ -108,4 +110,46 @@ TEST_F(WebTest, destroyWithTaskInFlightDoesNotHang)
             web->fetch({ "http://192.0.2.1/"sv, [](tr_web::FetchResponse const&) {}, nullptr, 60s });
             ++n_done;
         });
+}
+
+TEST_F(WebTest, bindInterfaceChangeEndsRequestOnThePreviousInterface)
+{
+    class Mediator final : public tr_web::Mediator
+    {
+    public:
+        [[nodiscard]] std::optional<std::string> bind_interface() const override
+        {
+            return bind_interface_;
+        }
+
+        std::optional<std::string> bind_interface_;
+    };
+
+    auto mediator = Mediator{};
+    auto const web = tr_web::create(mediator);
+
+    // TEST-NET-1 (RFC 5737) has no route, so this fetch stays in flight.
+    auto promise = std::promise<tr_web::FetchResponse>{};
+    auto future = promise.get_future();
+    web->fetch(
+        { "http://192.0.2.1/"sv,
+          [&promise](tr_web::FetchResponse const& response) { promise.set_value(response); },
+          nullptr,
+          60s });
+
+    // Let the curl thread start the request. A request that is still queued must end too,
+    // so the verdict does not depend on how far it got.
+    if (future.wait_for(250ms) == std::future_status::ready)
+    {
+        GTEST_SKIP() << "the request ended by itself, so there is nothing left to end";
+    }
+
+    mediator.bind_interface_ = "nosuchif0";
+    web->on_bind_interface_changed();
+
+    // The fetch ends long before its own timeout, and not because it timed out.
+    ASSERT_EQ(std::future_status::ready, future.wait_for(20s));
+    auto const response = future.get();
+    EXPECT_FALSE(response.did_timeout);
+    EXPECT_EQ(0, response.status);
 }

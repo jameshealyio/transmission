@@ -25,6 +25,7 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -220,6 +221,8 @@ public:
             this->user_agent = *ua;
         }
 
+        session_bind_interface_ = mediator.bind_interface();
+
         auto const lock = std::unique_lock{ tasks_mutex_ };
         curl_thread = std::make_unique<std::thread>(&Impl::curlThreadFunc, this);
     }
@@ -248,6 +251,15 @@ public:
         queued_tasks_cv_.notify_one();
     }
 
+    void on_bind_interface_changed()
+    {
+        auto bind_interface = mediator.bind_interface();
+
+        auto const lock = std::unique_lock{ tasks_mutex_ };
+        session_bind_interface_ = std::move(bind_interface);
+        session_bind_interface_changed_ = true;
+    }
+
     void fetch(FetchOptions&& options)
     {
         auto const lock = std::unique_lock{ tasks_mutex_ };
@@ -272,7 +284,7 @@ public:
         Task(tr_web::Impl& impl_in, tr_web::FetchOptions&& options_in)
             : impl{ impl_in }
             , options_{ std::move(options_in) }
-            , session_bind_interface_{ impl.mediator.bind_interface() }
+            , session_bind_interface_{ impl.session_bind_interface_ } // fetch() holds tasks_mutex_
         {
             auto const parsed = tr_urlParse(options_.url);
             easy_ = parsed ? impl.get_easy(parsed->host) : nullptr;
@@ -352,6 +364,12 @@ public:
             }
         }
 
+        // Whether this request uses the session's bind_interface and was queued under a different value.
+        [[nodiscard]] bool is_on_previous_interface(std::optional<std::string> const& session_bind_interface) const
+        {
+            return !options_.bind_interface && session_bind_interface_ != session_bind_interface;
+        }
+
         // A per-torrent override, including "default", takes precedence over the session setting.
         [[nodiscard]] std::string_view bind_interface() const
         {
@@ -427,6 +445,9 @@ public:
             if (auto const url = tr_urlParse(options_.url); url)
             {
                 curl_easy_reset(easy);
+                // curl_easy_reset() keeps the handle attached to the share object,
+                // and a share object cannot be destroyed while handles are attached
+                (void)curl_easy_setopt(easy, CURLOPT_SHARE, nullptr);
                 impl.easy_pool_[std::string{ url->host }].emplace(easy);
             }
             else
@@ -753,7 +774,11 @@ public:
     void remove_task(Task const& task)
     {
         auto const lock = std::unique_lock{ tasks_mutex_ };
+        remove_task_with_lock_held(task);
+    }
 
+    void remove_task_with_lock_held(Task const& task)
+    {
         auto const iter = std::ranges::find(running_tasks_, task);
         TR_ASSERT(iter != std::ranges::end(running_tasks_));
         if (iter == std::ranges::end(running_tasks_))
@@ -763,6 +788,45 @@ public:
 
         iter->done();
         running_tasks_.erase(iter);
+    }
+
+    // After the session's bind_interface changes, ends every running request and closes
+    // every connection. Left alone, idle connections would stay open on the previous
+    // interface, and libcurl lets a request that names no interface reuse a connection
+    // that is bound to one. The caller holds tasks_mutex_.
+    void restart_if_bind_interface_changed(curl_helpers::multi_unique_ptr& multi)
+    {
+        if (!session_bind_interface_changed_)
+        {
+            return;
+        }
+
+        session_bind_interface_changed_ = false;
+
+        while (!std::empty(running_tasks_))
+        {
+            auto& task = running_tasks_.front();
+            curl_multi_remove_handle(multi.get(), task.easy());
+            remove_task_with_lock_held(task);
+        }
+
+        // libcurl keeps its connections in the share object, or in the multi handle before 7.57
+        multi = make_multi();
+        curlsh_.reset(curl_share_init());
+        share_setopt();
+    }
+
+    [[nodiscard]] static curl_helpers::multi_unique_ptr make_multi()
+    {
+        auto multi = curl_helpers::multi_unique_ptr{ curl_multi_init() };
+#if LIBCURL_VERSION_NUM >= 0x071003 /* 7.16.3 */
+        (void)curl_multi_setopt(multi.get(), CURLMOPT_MAXCONNECTS, MaxCachedConnections);
+#endif
+#if LIBCURL_VERSION_NUM >= 0x071E00 /* 7.30.0 */
+        (void)curl_multi_setopt(multi.get(), CURLMOPT_MAX_TOTAL_CONNECTIONS, MaxTotalConnections);
+        (void)curl_multi_setopt(multi.get(), CURLMOPT_MAX_HOST_CONNECTIONS, MaxHostConnections);
+#endif
+        return multi;
     }
 
     void timeout_task(Task& task)
@@ -775,14 +839,7 @@ public:
     // the thread started by Impl.curl_thread runs this function
     void curlThreadFunc()
     {
-        auto const multi = curl_helpers::multi_unique_ptr{ curl_multi_init() };
-#if LIBCURL_VERSION_NUM >= 0x071003 /* 7.16.3 */
-        (void)curl_multi_setopt(multi.get(), CURLMOPT_MAXCONNECTS, MaxCachedConnections);
-#endif
-#if LIBCURL_VERSION_NUM >= 0x071E00 /* 7.30.0 */
-        (void)curl_multi_setopt(multi.get(), CURLMOPT_MAX_TOTAL_CONNECTIONS, MaxTotalConnections);
-        (void)curl_multi_setopt(multi.get(), CURLMOPT_MAX_HOST_CONNECTIONS, MaxHostConnections);
-#endif
+        auto multi = make_multi();
         auto const start_time = mediator.now();
 
         auto repeats = unsigned{};
@@ -820,17 +877,25 @@ public:
                     break;
                 }
 
-                // add queued tasks
-                if (!std::empty(queued_tasks_))
+                // before starting the requests that were queued after a bind_interface change
+                restart_if_bind_interface_changed(multi);
+
+                // add queued tasks, except those queued before the session's bind_interface changed
+                for (auto it = std::begin(queued_tasks_); it != std::end(queued_tasks_);)
                 {
-                    for (auto& task : queued_tasks_)
+                    if (it->is_on_previous_interface(session_bind_interface_))
                     {
-                        initEasy(task);
-                        curl_multi_add_handle(multi.get(), task.easy());
+                        it->done();
+                        it = queued_tasks_.erase(it);
+                        continue;
                     }
 
-                    running_tasks_.splice(std::end(running_tasks_), queued_tasks_);
+                    initEasy(*it);
+                    curl_multi_add_handle(multi.get(), it->easy());
+                    ++it;
                 }
+
+                running_tasks_.splice(std::end(running_tasks_), queued_tasks_);
             }
 
             resumePausedTasks();
@@ -860,6 +925,13 @@ public:
             else
             {
                 repeats = 0;
+            }
+
+            // The session's bind_interface may have changed during the wait.
+            // Check right before the update below, which is what sends.
+            {
+                auto const lock = std::unique_lock{ tasks_mutex_ };
+                restart_if_bind_interface_changed(multi);
             }
 
             // nonblocking update of the tasks
@@ -896,11 +968,17 @@ public:
         }
     }
 
-    curl_helpers::shared_unique_ptr const curlsh_{ curl_share_init() };
+    curl_helpers::shared_unique_ptr curlsh_{ curl_share_init() };
 
     std::map<std::string /*host*/, std::stack<curl_helpers::easy_unique_ptr>, std::less<>> easy_pool_;
 
     std::mutex tasks_mutex_;
+
+    // The session's bind_interface as of the last on_bind_interface_changed().
+    // The setting itself belongs to another thread, so the curl thread reads this copy.
+    // Guarded by tasks_mutex_.
+    std::optional<std::string> session_bind_interface_;
+    bool session_bind_interface_changed_ = false;
     std::condition_variable queued_tasks_cv_;
     std::list<Task> queued_tasks_;
     std::list<Task> running_tasks_;
@@ -954,6 +1032,11 @@ void tr_web::fetch(FetchOptions&& options)
 void tr_web::startShutdown(std::chrono::milliseconds deadline)
 {
     impl_->startShutdown(deadline);
+}
+
+void tr_web::on_bind_interface_changed()
+{
+    impl_->on_bind_interface_changed();
 }
 
 bool tr_web::is_idle() const noexcept
