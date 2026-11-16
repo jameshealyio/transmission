@@ -98,9 +98,7 @@ std::shared_ptr<tr_peerIo> tr_peerIo::create(
     TR_ASSERT(session != nullptr);
     auto lock = session->unique_lock();
 
-    auto const io = std::shared_ptr<tr_peerIo>{
-        new tr_peerIo{ session, parent, info_hash, is_incoming, is_seed, {} }
-    };
+    auto const io = std::shared_ptr<tr_peerIo>{ new tr_peerIo{ session, parent, info_hash, is_incoming, is_seed, {} } };
     io->set_socket(std::move(socket));
     io->bandwidth().set_peer(io);
     io->flush_outbuf_trigger_->set_callback(

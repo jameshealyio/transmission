@@ -517,7 +517,8 @@ static NSString* TRDisplayableSessionBindInterface(NSString* bindInterface)
                                                        action:@selector(showBindInterfaceInfo:)];
     self.fBindInterfaceInfoButton.bezelStyle = NSBezelStyleInline;
     self.fBindInterfaceInfoButton.bordered = NO;
-    self.fBindInterfaceInfoButton.toolTip = NSLocalizedString(@"Show details about the current bind connection.",
+    self.fBindInterfaceInfoButton.toolTip = NSLocalizedString(
+        @"Show details about the current bind connection.",
         "Preferences -> Network -> bind interface info tooltip");
     self.fBindInterfaceInfoButton.translatesAutoresizingMaskIntoConstraints = NO;
 
