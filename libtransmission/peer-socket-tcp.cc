@@ -11,6 +11,8 @@
 #include <netinet/tcp.h> // TCP_CONGESTION
 #endif
 
+#include <utility> // std::cmp_equal
+
 #include <event2/event.h>
 
 #include <fmt/format.h>
@@ -29,7 +31,7 @@ namespace
 tr_socket_t create_socket(int const domain)
 {
     auto const sockfd = socket(domain, SOCK_STREAM, 0);
-    if (sockfd == TR_BAD_SOCKET)
+    if (!is_valid_socket(sockfd))
     {
         if (sockerrno != EAFNOSUPPORT)
         {
@@ -88,7 +90,7 @@ tr_socket_t open_peer_socket(
     }
 
     auto const s = create_socket(tr_ip_protocol_to_af(addr.type));
-    if (s == TR_BAD_SOCKET)
+    if (!is_valid_socket(s))
     {
         return TR_BAD_SOCKET;
     }
@@ -173,7 +175,7 @@ public:
         : tr_peer_socket_tcp{ socket_address }
         , sock_{ sock }
     {
-        TR_ASSERT(sock_ != TR_BAD_SOCKET);
+        TR_ASSERT(is_valid_socket(sock_));
 
         session.setSocketDiffServ(sock, address().type);
 
@@ -332,7 +334,7 @@ private:
         auto* const s = static_cast<tr_peer_socket_tcp_impl*>(vs);
         tr_logAddTraceSock(s, "libevent says this peer socket is ready for reading");
 
-        TR_ASSERT(s->sock_ == fd);
+        TR_ASSERT(std::cmp_equal(s->sock_, fd));
 
         s->is_read_enabled_ = false;
         s->read_cb();
@@ -343,7 +345,7 @@ private:
         auto* const s = static_cast<tr_peer_socket_tcp_impl*>(vs);
         tr_logAddTraceSock(s, "libevent says this peer socket is ready for writing");
 
-        TR_ASSERT(s->sock_ == fd);
+        TR_ASSERT(std::cmp_equal(s->sock_, fd));
 
         s->is_write_enabled_ = false;
         s->write_cb();
@@ -370,7 +372,7 @@ std::unique_ptr<tr_peer_socket_tcp> tr_peer_socket_tcp::create(
     bool const client_is_seed,
     std::string_view const bind_interface)
 {
-    if (auto const sock = open_peer_socket(session, socket_address, client_is_seed, bind_interface); sock != TR_BAD_SOCKET)
+    if (auto const sock = open_peer_socket(session, socket_address, client_is_seed, bind_interface); is_valid_socket(sock))
     {
         return create(session, socket_address, sock);
     }

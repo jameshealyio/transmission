@@ -31,7 +31,6 @@ add_link_options(
     $<$<LINK_LANGUAGE:C,CXX>:-dead_strip>)
 
 add_subdirectory(QuickLookExtension)
-add_subdirectory(QuickLookPlugin)
 add_subdirectory(VDKQueue)
 
 add_executable(${TR_NAME}-mac MACOSX_BUNDLE)
@@ -48,6 +47,8 @@ target_sources(${TR_NAME}-mac
         Badger.mm
         BadgeView.h
         BadgeView.mm
+        BaseFileNameCellView.h
+        BaseFileNameCellView.mm
         BlocklistDownloader.h
         BlocklistDownloader.mm
         BlocklistDownloaderViewController.h
@@ -79,8 +80,6 @@ target_sources(${TR_NAME}-mac
         FileListNode.mm
         FileCheckCellView.h
         FileCheckCellView.mm
-        FileNameCellView.h
-        FileNameCellView.mm
         FileOutlineController.h
         FileOutlineController.mm
         FileOutlineView.h
@@ -131,8 +130,6 @@ target_sources(${TR_NAME}-mac
         NSDataAdditions.mm
         NSImageAdditions.h
         NSImageAdditions.mm
-        NSKeyedUnarchiverAdditions.h
-        NSKeyedUnarchiverAdditions.mm
         NSMutableArrayAdditions.h
         NSMutableArrayAdditions.mm
         NSStringAdditions.h
@@ -196,8 +193,6 @@ target_sources(${TR_NAME}-mac
         URLSheetWindowController.mm
         Utils.h
         Utils.mm
-        VersionComparator.h
-        VersionComparator.mm
         WebSeedTableView.h
         WebSeedTableView.mm)
 
@@ -218,7 +213,6 @@ set(XIB_FILES
 set(RESOURCES
     Defaults.plist
     Credits.rtf
-    sparkle_dsa_pub.pem
     ../COPYING
     Images/TransmissionDocument.icns)
 source_group(Resources

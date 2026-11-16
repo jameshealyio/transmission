@@ -42,10 +42,10 @@
 #include "libtransmission/announcer.h"
 #include "libtransmission/bandwidth.h"
 #include "libtransmission/blocklist.h"
+#include "libtransmission/config-dir-lock.h"
 #include "libtransmission/interned-string.h"
 #include "libtransmission/ip-cache.h"
 #include "libtransmission/local-data.h"
-#include "libtransmission/log.h" // for tr_log_level
 #include "libtransmission/net.h" // for tr_port, tr_tos_t
 #include "libtransmission/open-files.h"
 #include "libtransmission/platform.h"
@@ -490,6 +490,12 @@ public:
     [[nodiscard]] constexpr std::string const& configDir() const noexcept
     {
         return config_dir_;
+    }
+
+    // See tr_sessionOwnsConfigDir().
+    [[nodiscard]] bool ownsConfigDir() const noexcept
+    {
+        return config_dir_lock_.is_held();
     }
 
     [[nodiscard]] constexpr auto const& torrentDir() const noexcept
@@ -1231,6 +1237,10 @@ private:
     /// const fields
 
     std::string const config_dir_;
+
+    // Held for the session's lifetime. See tr_sessionOwnsConfigDir().
+    tr_config_dir_lock const config_dir_lock_;
+
     std::string const resume_dir_;
     std::string const torrent_dir_;
     std::string const blocklist_dir_;

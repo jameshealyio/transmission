@@ -432,7 +432,7 @@ tr_session::BoundSocket::BoundSocket(
           &BoundSocket::onCanRead,
           this) }
 {
-    if (socket_ == TR_BAD_SOCKET)
+    if (!is_valid_socket(socket_))
     {
         return;
     }
@@ -448,7 +448,7 @@ tr_session::BoundSocket::~BoundSocket()
 {
     ev_.reset();
 
-    if (socket_ != TR_BAD_SOCKET)
+    if (is_valid_socket(socket_))
     {
         tr_net_close_socket(socket_);
         socket_ = TR_BAD_SOCKET;
@@ -525,24 +525,29 @@ tr_variant tr_sessionGetSettings(tr_session const* session)
 
 tr_variant tr_sessionLoadSettings(std::string_view const config_dir, tr_variant const* const app_defaults)
 {
-    // start with session defaults...
-    auto settings = tr_sessionGetDefaultSettings();
+    // merge in order of precedence:
+    // 1. the previous session's settings from `settings.json`
+    // 2. app_defaults, if provided
+    // 3. lastly, `tr_sessionGetDefaultSettings()` to fill in any blanks
 
-    // ...app defaults (if provided) override session defaults...
-    if (app_defaults != nullptr && app_defaults->holds_alternative<tr_variant::Map>())
-    {
-        settings.merge(*app_defaults);
-    }
+    auto settings = tr_variant::make_map();
 
-    // ...and settings.json (if available) override the defaults
+    // settings.json (if available) has highest precedence
     if (auto const filename = fmt::format("{:s}/settings.json", config_dir); tr_sys_path_exists(filename))
     {
         if (auto file_settings = tr_variant_serde::json().parse_file(filename))
         {
             tr::api_compat::convert_incoming_data(*file_settings);
-            settings.merge(*file_settings);
+            settings.merge(std::move(*file_settings));
         }
     }
+
+    if (app_defaults != nullptr && app_defaults->holds_alternative<tr_variant::Map>())
+    {
+        settings.merge(*app_defaults);
+    }
+
+    settings.merge(tr_sessionGetDefaultSettings());
 
     return settings;
 }
@@ -560,14 +565,14 @@ void tr_sessionSaveSettings(tr_session* session, std::string_view const config_d
     // - client settings
     // - previous session's settings stored in settings.json
     // - built-in defaults
-    auto settings = tr_sessionGetDefaultSettings();
+    auto settings = tr_sessionGetSettings(session);
+    settings.merge(client_settings);
     if (auto file_settings = tr_variant_serde::json().parse_file(filename); file_settings)
     {
         tr::api_compat::convert_incoming_data(*file_settings);
         settings.merge(*file_settings);
     }
-    settings.merge(client_settings);
-    settings.merge(tr_sessionGetSettings(session));
+    settings.merge(tr_sessionGetDefaultSettings());
 
     // save 'em
     tr::api_compat::convert_outgoing_data(settings);
@@ -607,8 +612,8 @@ tr_session* tr_sessionInit(std::string_view const config_dir, bool message_queue
     // - client settings
     // - previous session's values in settings.json
     // - hardcoded defaults
-    auto settings = tr_sessionLoadSettings(config_dir);
-    settings.merge(client_settings);
+    auto settings = client_settings.clone();
+    settings.merge(tr_sessionLoadSettings(config_dir));
 
     // if logging is desired, start it now before doing more work
     if (auto const* settings_map = settings.get_if<tr_variant::Map>(); settings_map != nullptr)
@@ -1035,6 +1040,13 @@ std::string tr_sessionGetConfigDir(tr_session const* session)
     TR_ASSERT(session != nullptr);
 
     return session->configDir();
+}
+
+bool tr_sessionOwnsConfigDir(tr_session const* session)
+{
+    TR_ASSERT(session != nullptr);
+
+    return session->ownsConfigDir();
 }
 
 // ---
@@ -2218,10 +2230,20 @@ auto makeBlocklistDir(std::string_view config_dir)
 {
     return makeSubdir(config_dir, "blocklists"sv);
 }
+
+auto makeConfigDirLock(std::string_view config_dir)
+{
+    // A dir has to exist before it can be locked, and the subdirs below are the
+    // first things written into it, so a session on a new config dir claims it
+    // too.
+    tr_sys_dir_create(config_dir, TR_SYS_DIR_CREATE_PARENTS, 0777);
+    return tr_config_dir_lock{ config_dir };
+}
 } // namespace
 
 tr_session::tr_session(std::string_view config_dir, tr_variant const& settings_dict)
     : config_dir_{ config_dir }
+    , config_dir_lock_{ makeConfigDirLock(config_dir) }
     , resume_dir_{ makeResumeDir(config_dir) }
     , torrent_dir_{ makeTorrentDir(config_dir) }
     , blocklist_dir_{ makeBlocklistDir(config_dir) }

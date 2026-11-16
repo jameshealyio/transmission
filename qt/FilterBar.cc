@@ -62,7 +62,7 @@ FilterBarComboBox* FilterBar::createActivityCombo()
     add_row(ShowMode::ShowSeeding, tr("Seeding"), icons::Type::TorrentStateSeeding);
     add_row(ShowMode::ShowDownloading, tr("Downloading"), icons::Type::TorrentStateDownloading);
     add_row(ShowMode::ShowPaused, tr("Paused"), icons::Type::TorrentStatePaused);
-    add_row(ShowMode::ShowFinished, tr("Finished"), {});
+    add_row(ShowMode::ShowFinished, tr("Finished"), icons::Type::TorrentStateFinished);
     add_row(ShowMode::ShowVerifying, tr("Verifying"), icons::Type::TorrentStateVerifying);
     add_row(ShowMode::ShowError, tr("Error"), icons::Type::TorrentStateError);
 
@@ -267,9 +267,8 @@ void FilterBar::refreshPref(tr_quark key)
     case TR_KEY_filter_mode:
         {
             auto const show_mode = prefs_.get<ShowMode>(key);
-            QAbstractItemModel const* const model = activity_combo_->model();
-            QModelIndexList indices = model->match(model->index(0, 0), ACTIVITY_ROLE, QVariant::fromValue(show_mode));
-            activity_combo_->setCurrentIndex(indices.isEmpty() ? 0 : indices.first().row());
+            auto const row = activity_combo_->findData(QVariant::fromValue(show_mode), ACTIVITY_ROLE);
+            activity_combo_->setCurrentIndex(row == -1 ? 0 : row);
             break;
         }
 

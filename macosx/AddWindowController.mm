@@ -163,9 +163,11 @@ typedef NS_ENUM(NSUInteger, PopupPriority) {
         self.fLocationImageView.image = nil;
     }
 
-    self.fTimer = [NSTimer scheduledTimerWithTimeInterval:kUpdateSeconds target:self selector:@selector(updateFiles)
-                                                 userInfo:nil
-                                                  repeats:YES];
+    __weak __auto_type weakSelf = self;
+    self.fTimer = [NSTimer scheduledTimerWithTimeInterval:kUpdateSeconds repeats:YES block:^(NSTimer* _Nonnull timer) {
+        [weakSelf updateFiles];
+    }];
+
     [self updateFiles];
 }
 
@@ -206,7 +208,9 @@ typedef NS_ENUM(NSUInteger, PopupPriority) {
         {
             if (!self.fDestination)
             {
-                [self performSelectorOnMainThread:@selector(cancelAdd:) withObject:nil waitUntilDone:NO];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self cancelAdd:nil];
+                });
             }
         }
     }];
@@ -271,7 +275,9 @@ typedef NS_ENUM(NSUInteger, PopupPriority) {
 
             if (returnCode == NSAlertSecondButtonReturn)
             {
-                [self performSelectorOnMainThread:@selector(confirmAdd) withObject:nil waitUntilDone:NO];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self confirmAdd];
+                });
             }
         }];
     }
@@ -388,8 +394,6 @@ typedef NS_ENUM(NSUInteger, PopupPriority) {
 
 - (void)updateFiles
 {
-    [self.torrent update];
-
     [self.fFileController reloadVisibleRows];
 
     [self updateCheckButtons:nil]; //call in case button state changed by checking

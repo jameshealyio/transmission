@@ -15,15 +15,11 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "libtransmission/values.h"
 
-struct tr_ctor;
 struct tr_error;
-struct tr_session;
-struct tr_torrent;
-struct tr_torrent_metainfo;
-struct tr_variant;
 
 // https://www.bittorrent.org/beps/bep_0007.html
 // "The client SHOULD include a key parameter in its announces. The key
@@ -227,6 +223,33 @@ enum tr_idlelimit : uint8_t
     TR_IDLELIMIT_UNLIMITED = 2
 };
 
+enum tr_log_level : uint8_t
+{
+    // No logging at all
+    TR_LOG_OFF,
+
+    // Errors that prevent Transmission from running
+    TR_LOG_CRITICAL,
+
+    // Errors that could prevent a single torrent from running, e.g. missing
+    // files or a private torrent's tracker responding "unregistered torrent"
+    TR_LOG_ERROR,
+
+    // Smaller errors that don't stop the overall system,
+    // e.g. unable to preallocate a file, or unable to connect to a tracker
+    // when other trackers are available
+    TR_LOG_WARN,
+
+    // User-visible info, e.g. "torrent completed" or "running script"
+    TR_LOG_INFO,
+
+    // Debug messages
+    TR_LOG_DEBUG,
+
+    // High-volume debug messages, e.g. tracing peer protocol messages
+    TR_LOG_TRACE
+};
+
 enum tr_peer_from : uint8_t
 {
     TR_PEER_FROM_INCOMING = 0, /* connections made to the listening port */
@@ -236,6 +259,7 @@ enum tr_peer_from : uint8_t
     TR_PEER_FROM_PEX, /* peers found from PEX */
     TR_PEER_FROM_RESUME, /* peers found in the .resume file */
     TR_PEER_FROM_LTEP, /* peer address provided in an LTEP handshake */
+    TR_PEER_FROM_HOLEPUNCH, /* peers found via BEP 55 holepunch connect */
     TR_PEER_FROM_N_TYPES
 };
 
@@ -433,6 +457,7 @@ struct tr_peer_stat
     bool is_utp = {};
     bool peer_is_choked = {};
     bool peer_is_interested = {};
+    bool supports_holepunch = {};
 };
 
 /** @brief Used by `tr_sessionGetStats()` and `tr_sessionGetCumulativeStats()` */
@@ -718,6 +743,8 @@ using tr_session_ratio_limit_hit_func = std::function<void(tr_torrent_id_t)>;
 using tr_torrent_completeness_func = std::function<void(tr_torrent_id_t, tr_completeness completeness, bool was_running)>;
 
 using tr_torrent_remove_func = std::function<bool(std::string_view filename, tr_error* error)>;
+
+using tr_torrent_stats_func = std::function<void(std::vector<tr_stat>)>;
 
 using tr_rpc_func = std::function<tr_rpc_callback_status(tr_rpc_callback_type type, std::optional<tr_torrent_id_t>)>;
 

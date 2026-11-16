@@ -177,6 +177,30 @@ std::shared_ptr<tr_peerIo> tr_peerIo::new_outgoing(
     return {};
 }
 
+std::shared_ptr<tr_peerIo> tr_peerIo::new_outgoing_utp(
+    tr_session* session,
+    tr_bandwidth* parent,
+    tr_socket_address const& socket_address,
+    tr_sha1_digest_t const& info_hash,
+    bool client_is_seed)
+{
+    TR_ASSERT(session != nullptr);
+    TR_ASSERT(socket_address.is_valid());
+
+    if (!session->allowsUTP())
+    {
+        return {};
+    }
+
+    auto socket = tr_peer_socket_utp::create(socket_address, session->utp_context, session->timerMaker());
+    if (!socket)
+    {
+        return {};
+    }
+
+    return tr_peerIo::create(session, std::move(socket), parent, &info_hash, false, client_is_seed);
+}
+
 tr_peerIo::~tr_peerIo()
 {
     auto const lock = session_->unique_lock();
@@ -253,8 +277,8 @@ bool tr_peerIo::reconnect()
         return false;
     }
 
-    auto const was_read_enabled = socket_->is_read_enabled();
-    auto const was_write_enabled = socket_->is_write_enabled();
+    auto const was_read_enabled = socket_ ? socket_->is_read_enabled() : false;
+    auto const was_write_enabled = socket_ ? socket_->is_write_enabled() : false;
 
     close();
 
@@ -313,6 +337,11 @@ size_t tr_peerIo::try_write(size_t max)
     static auto constexpr Dir = tr_direction::Up;
 
     if (max == 0U)
+    {
+        return {};
+    }
+
+    if (!socket_)
     {
         return {};
     }
@@ -420,6 +449,11 @@ size_t tr_peerIo::try_read(size_t max)
         return {};
     }
 
+    if (!socket_)
+    {
+        return {};
+    }
+
     // Do not read more than the bandwidth allows.
     // If there is no bandwidth left available, disable reads.
     max = bandwidth().clamp(Dir, max);
@@ -465,6 +499,11 @@ void tr_peerIo::read_cb()
 
 void tr_peerIo::set_enabled(tr_direction dir, bool is_enabled)
 {
+    if (!socket_)
+    {
+        return;
+    }
+
     if (dir == tr_direction::Up)
     {
         socket_->set_write_enabled(is_enabled);

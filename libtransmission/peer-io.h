@@ -75,6 +75,13 @@ public:
         bool utp,
         std::string_view bind_interface);
 
+    static std::shared_ptr<tr_peerIo> new_outgoing_utp(
+        tr_session* session,
+        tr_bandwidth* parent,
+        tr_socket_address const& socket_address,
+        tr_sha1_digest_t const& info_hash,
+        bool client_is_seed);
+
     static std::shared_ptr<tr_peerIo> new_incoming(
         tr_session* session,
         tr_bandwidth* parent,
@@ -97,7 +104,7 @@ public:
 
     [[nodiscard]] auto is_utp() const noexcept
     {
-        return socket_->is_utp();
+        return socket_ ? socket_->is_utp() : false;
     }
 
     void clear();
