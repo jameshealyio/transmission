@@ -215,6 +215,32 @@ std::optional<ParsedAnnounce> parseAnnounceMsg(std::string_view announce)
     return ret;
 }
 
+// Joins an IPv4 multicast group on the given interface and sends multicast through it.
+// IP_ADD_MEMBERSHIP would pick the interface by route lookup instead: Linux ignores
+// SO_BINDTODEVICE when doing that, and macOS ignores an interface index passed to it.
+[[nodiscard]] bool use_ipv4_group_on_interface(
+    [[maybe_unused]] tr_socket_t const sock,
+    [[maybe_unused]] sockaddr_in const& group,
+    [[maybe_unused]] unsigned const if_index)
+{
+#if defined(__APPLE__) || defined(__linux__) // the platforms where tr_net_bind_interface_index() finds an interface
+    auto join_req = group_req{};
+    join_req.gr_interface = if_index;
+    std::memcpy(&join_req.gr_group, &group, sizeof(group));
+#ifdef __APPLE__
+    join_req.gr_group.ss_len = sizeof(group);
+#endif
+
+    auto send_req = ip_mreqn{};
+    send_req.imr_ifindex = static_cast<int>(if_index);
+
+    return setsockopt(sock, IPPROTO_IP, MCAST_JOIN_GROUP, reinterpret_cast<char const*>(&join_req), sizeof(join_req)) != -1 &&
+        setsockopt(sock, IPPROTO_IP, IP_MULTICAST_IF, reinterpret_cast<char const*>(&send_req), sizeof(send_req)) != -1;
+#else
+    return false;
+#endif
+}
+
 } // namespace
 
 class tr_lpd_impl final : public tr_lpd
@@ -369,8 +395,22 @@ private:
             mcast_req.imr_multiaddr = mcast_addr_.sin_addr;
             mcast_req.imr_interface = mediator_.bind_address(ip_protocol).addr.addr4;
 
-            if (setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, reinterpret_cast<char const*>(&mcast_req), sizeof(mcast_req)) ==
-                -1)
+            if (auto const if_index = tr_net_bind_interface_index(mediator_.bind_interface()); if_index)
+            {
+                if (!use_ipv4_group_on_interface(sock, mcast_addr_, *if_index))
+                {
+                    return false;
+                }
+            }
+            else if (
+                setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, reinterpret_cast<char const*>(&mcast_req), sizeof(mcast_req)) ==
+                    -1 ||
+                setsockopt(
+                    sock,
+                    IPPROTO_IP,
+                    IP_MULTICAST_IF,
+                    reinterpret_cast<char const*>(&mcast_req.imr_interface),
+                    sizeof(mcast_req.imr_interface)) == -1)
             {
                 return false;
             }
@@ -382,16 +422,6 @@ private:
                     IP_MULTICAST_TTL,
                     reinterpret_cast<char const*>(&AnnounceScope),
                     sizeof(AnnounceScope)) == -1)
-            {
-                return false;
-            }
-
-            if (setsockopt(
-                    sock,
-                    IPPROTO_IP,
-                    IP_MULTICAST_IF,
-                    reinterpret_cast<char const*>(&mcast_req.imr_interface),
-                    sizeof(mcast_req.imr_interface)) == -1)
             {
                 return false;
             }
@@ -410,6 +440,10 @@ private:
             struct ipv6_mreq mcast_req = {};
             mcast_req.ipv6mr_multiaddr = mcast6_addr_.sin6_addr;
             mcast_req.ipv6mr_interface = mediator_.bind_address(ip_protocol).to_interface_index().value_or(0);
+            if (auto const if_index = tr_net_bind_interface_index(mediator_.bind_interface()); if_index)
+            {
+                mcast_req.ipv6mr_interface = *if_index;
+            }
 
             if (setsockopt(sock, IPPROTO_IPV6, IPV6_JOIN_GROUP, reinterpret_cast<char const*>(&mcast_req), sizeof(mcast_req)) ==
                 -1)
