@@ -123,7 +123,7 @@ std::string_view tr_net_effective_bind_interface(std::string_view const bind_int
 
 bool tr_netSetSocketInterface(
     tr_socket_t const sock,
-    tr_address_type const type,
+    [[maybe_unused]] tr_address_type const type,
     std::string_view const bind_interface,
     bool const suppress_msgs)
 {
@@ -133,9 +133,9 @@ bool tr_netSetSocketInterface(
         return true;
     }
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__linux__)
     auto const ifname = std::string{ name };
-    auto const if_index = if_nametoindex(ifname.c_str());
+    auto const if_index = std::size(ifname) < IFNAMSIZ ? if_nametoindex(ifname.c_str()) : 0U;
     if (if_index == 0U)
     {
         set_sockerrno(ENXIO);
@@ -146,15 +146,32 @@ bool tr_netSetSocketInterface(
         return false;
     }
 
+#if defined(__APPLE__)
+    // IP_BOUND_IF / IPV6_BOUND_IF scope the socket's route lookups to the interface,
+    // so traffic cannot follow a default route (e.g. a VPN tunnel) on another interface.
+    // Binding to the interface's address is not enough: macOS still routes by destination.
     auto const level = type == TR_AF_INET ? IPPROTO_IP : IPPROTO_IPV6;
     auto const option = type == TR_AF_INET ? IP_BOUND_IF : IPV6_BOUND_IF;
     auto const index = static_cast<int>(if_index);
-    if (setsockopt(sock, level, option, reinterpret_cast<char const*>(&index), sizeof(index)) == -1)
+    auto const ret = setsockopt(sock, level, option, reinterpret_cast<char const*>(&index), sizeof(index));
+#else
+    // SO_BINDTODEVICE does the same on Linux. It needs no privileges since kernel 5.7;
+    // older kernels require CAP_NET_RAW. Names of IFNAMSIZ or more were rejected above,
+    // so the kernel cannot truncate the name to a different interface.
+    auto const ret = setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, ifname.c_str(), static_cast<socklen_t>(std::size(ifname)));
+#endif
+    if (ret == -1)
     {
         if (!suppress_msgs)
         {
+            auto const err = sockerrno;
+#ifdef __linux__
+            auto const hint = err == EPERM ? "; Linux kernels older than 5.7 need CAP_NET_RAW"sv : ""sv;
+#else
+            auto constexpr hint = ""sv;
+#endif
             tr_logAddWarn(
-                fmt::format("Couldn't bind socket to interface '{}': {} ({})", name, tr_net_strerror(sockerrno), sockerrno));
+                fmt::format("Couldn't bind socket to interface '{}': {} ({}){}", name, tr_net_strerror(err), err, hint));
         }
         return false;
     }

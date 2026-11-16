@@ -141,7 +141,7 @@ auto constexpr Options = std::array<tr_option, 49>{ {
     { 'I', "bind-address-ipv6", "Where to listen for peer connections", "I", Arg::Required, "<ipv6 addr>" },
     { 996,
       "bind-interface",
-      "Network interface for BitTorrent and tracker traffic on supported platforms",
+      "Network interface for BitTorrent and tracker traffic (macOS and Linux)",
       nullptr,
       Arg::Required,
       "<ifname>" },

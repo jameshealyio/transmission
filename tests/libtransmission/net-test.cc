@@ -1033,3 +1033,52 @@ TEST_F(NetTest, isValidForPeers)
         }
     }
 }
+
+TEST_F(NetTest, bindInterface)
+{
+#if defined(__APPLE__)
+    static auto constexpr LoopbackInterface = "lo0"sv;
+#elif defined(__linux__)
+    static auto constexpr LoopbackInterface = "lo"sv;
+#else
+    static auto constexpr LoopbackInterface = std::string_view{};
+#endif
+    static auto constexpr MissingInterface = "trnosuchif0"sv;
+
+    auto const loopback = tr_address::from_string("127.0.0.1");
+    ASSERT_TRUE(loopback.has_value());
+
+    // an empty or "default" value leaves the socket alone
+    auto sock = socket(AF_INET, SOCK_DGRAM, 0);
+    ASSERT_TRUE(is_valid_socket(sock));
+    EXPECT_TRUE(tr_netSetSocketInterface(sock, TR_AF_INET, ""sv, true));
+    EXPECT_TRUE(tr_netSetSocketInterface(sock, TR_AF_INET, "default"sv, true));
+
+    // a missing interface must fail rather than fall back to normal routing
+    EXPECT_FALSE(tr_netSetSocketInterface(sock, TR_AF_INET, MissingInterface, true));
+    EXPECT_EQ(TR_BAD_SOCKET, tr_netBindTCP(*loopback, tr_port::from_host(0), true, MissingInterface));
+
+    if (std::empty(LoopbackInterface))
+    {
+        // interface binding is not supported on this platform, so it must fail closed
+        EXPECT_FALSE(tr_netSetSocketInterface(sock, TR_AF_INET, "lo0"sv, true));
+        tr_net_close_socket(sock);
+        return;
+    }
+
+    auto const bound = tr_netSetSocketInterface(sock, TR_AF_INET, LoopbackInterface, true);
+    auto const err = sockerrno;
+    tr_net_close_socket(sock);
+    if (!bound && err == EPERM)
+    {
+        GTEST_SKIP() << "binding to an interface needs CAP_NET_RAW on Linux kernels older than 5.7";
+    }
+    EXPECT_TRUE(bound);
+
+    sock = tr_netBindTCP(*loopback, tr_port::from_host(0), true, LoopbackInterface);
+    EXPECT_TRUE(is_valid_socket(sock));
+    if (is_valid_socket(sock))
+    {
+        tr_net_close_socket(sock);
+    }
+}
