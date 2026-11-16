@@ -139,7 +139,7 @@ std::optional<unsigned> tr_net_bind_interface_index([[maybe_unused]] std::string
 }
 
 bool tr_netSetSocketInterface(
-    tr_socket_t const sock,
+    [[maybe_unused]] tr_socket_t const sock,
     [[maybe_unused]] tr_address_type const type,
     std::string_view const bind_interface,
     bool const suppress_msgs)

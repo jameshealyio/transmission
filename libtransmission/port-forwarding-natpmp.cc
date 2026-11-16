@@ -59,7 +59,9 @@ void log_val(char const* func, int ret)
 
 // initnatpmp() connects its socket to the default gateway, so the socket's
 // local address shows which interface the system routes NAT-PMP through.
-[[nodiscard]] bool is_gateway_route_on_interface(natpmp_t const& natpmp, std::string_view const bind_interface)
+[[nodiscard]] bool is_gateway_route_on_interface(
+    [[maybe_unused]] natpmp_t const& natpmp,
+    [[maybe_unused]] std::string_view const bind_interface)
 {
 #ifdef _WIN32
     // interface binding is not supported on Windows
