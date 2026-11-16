@@ -1055,6 +1055,8 @@ TEST_F(NetTest, bindInterface)
     EXPECT_TRUE(tr_netSetSocketInterface(sock, TR_AF_INET, "default"sv, true));
 
     // a missing interface must fail rather than fall back to normal routing
+    EXPECT_FALSE(tr_net_bind_interface_index(MissingInterface));
+    EXPECT_FALSE(tr_net_bind_interface_index("0.0.0.0"sv));
     EXPECT_FALSE(tr_netSetSocketInterface(sock, TR_AF_INET, MissingInterface, true));
     EXPECT_EQ(TR_BAD_SOCKET, tr_netBindTCP(*loopback, tr_port::from_host(0), true, MissingInterface));
 
@@ -1065,6 +1067,8 @@ TEST_F(NetTest, bindInterface)
         tr_net_close_socket(sock);
         return;
     }
+
+    EXPECT_TRUE(tr_net_bind_interface_index(LoopbackInterface));
 
     auto const bound = tr_netSetSocketInterface(sock, TR_AF_INET, LoopbackInterface, true);
     auto const err = sockerrno;

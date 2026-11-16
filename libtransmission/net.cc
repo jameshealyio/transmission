@@ -121,6 +121,23 @@ std::string_view tr_net_effective_bind_interface(std::string_view const bind_int
     return tr_net_interface_is_default(name) ? std::string_view{} : name;
 }
 
+std::optional<unsigned> tr_net_bind_interface_index([[maybe_unused]] std::string_view const bind_interface)
+{
+#if defined(__APPLE__) || defined(__linux__)
+    // names of IFNAMSIZ or more are rejected so that SO_BINDTODEVICE cannot truncate them to another interface
+    if (auto const name = std::string{ tr_net_effective_bind_interface(bind_interface) };
+        !std::empty(name) && std::size(name) < IFNAMSIZ)
+    {
+        if (auto const index = if_nametoindex(name.c_str()); index != 0U)
+        {
+            return index;
+        }
+    }
+#endif
+
+    return {};
+}
+
 bool tr_netSetSocketInterface(
     tr_socket_t const sock,
     [[maybe_unused]] tr_address_type const type,
@@ -134,9 +151,8 @@ bool tr_netSetSocketInterface(
     }
 
 #if defined(__APPLE__) || defined(__linux__)
-    auto const ifname = std::string{ name };
-    auto const if_index = std::size(ifname) < IFNAMSIZ ? if_nametoindex(ifname.c_str()) : 0U;
-    if (if_index == 0U)
+    auto const if_index = tr_net_bind_interface_index(name);
+    if (!if_index)
     {
         set_sockerrno(ENXIO);
         if (!suppress_msgs)
@@ -152,12 +168,12 @@ bool tr_netSetSocketInterface(
     // Binding to the interface's address is not enough: macOS still routes by destination.
     auto const level = type == TR_AF_INET ? IPPROTO_IP : IPPROTO_IPV6;
     auto const option = type == TR_AF_INET ? IP_BOUND_IF : IPV6_BOUND_IF;
-    auto const index = static_cast<int>(if_index);
+    auto const index = static_cast<int>(*if_index);
     auto const ret = setsockopt(sock, level, option, reinterpret_cast<char const*>(&index), sizeof(index));
 #else
     // SO_BINDTODEVICE does the same on Linux. It needs no privileges since kernel 5.7;
-    // older kernels require CAP_NET_RAW. Names of IFNAMSIZ or more were rejected above,
-    // so the kernel cannot truncate the name to a different interface.
+    // older kernels require CAP_NET_RAW.
+    auto const ifname = std::string{ name };
     auto const ret = setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, ifname.c_str(), static_cast<socklen_t>(std::size(ifname)));
 #endif
     if (ret == -1)

@@ -525,6 +525,10 @@ struct tr_session;
 
 [[nodiscard]] std::string_view tr_net_effective_bind_interface(std::string_view bind_interface);
 
+// Index of the interface that bind_interface names, if this platform can bind sockets to it.
+// Empty for the default route, a missing interface, or a platform without interface binding.
+[[nodiscard]] std::optional<unsigned> tr_net_bind_interface_index(std::string_view bind_interface);
+
 [[nodiscard]] bool tr_netSetSocketInterface(
     tr_socket_t sock,
     tr_address_type type,

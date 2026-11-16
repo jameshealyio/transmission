@@ -6,11 +6,18 @@
 #include <algorithm>
 #include <chrono>
 #include <memory>
+#include <string>
+#include <string_view>
+
+#if defined(__APPLE__) || defined(__linux__)
+#include <arpa/inet.h> // inet_addr()
+#endif
 
 #include <fmt/format.h>
 
 #define LIBTRANSMISSION_PORT_FORWARDING_MODULE
 #include "libtransmission/log.h"
+#include "libtransmission/net.h"
 #include "libtransmission/port-forwarding-natpmp.h"
 #include "libtransmission/port-forwarding-upnp.h"
 #include "libtransmission/port-forwarding.h"
@@ -21,6 +28,21 @@
 struct tr_upnp;
 
 using namespace std::literals;
+
+namespace
+{
+// Whether miniupnpc will read `name` as an interface that sockets can be bound to.
+// It reads anything inet_addr() can parse as an address instead, and an address such
+// as "0.0.0.0" would send discovery through the default route.
+[[nodiscard]] bool is_upnp_interface_name([[maybe_unused]] std::string_view const name)
+{
+#if defined(__APPLE__) || defined(__linux__)
+    return tr_net_bind_interface_index(name) && inet_addr(std::string{ name }.c_str()) == INADDR_NONE;
+#else
+    return false; // sockets cannot be bound to an interface on this platform
+#endif
+}
+} // namespace
 
 class tr_port_forwarding_impl final : public tr_port_forwarding
 {
@@ -186,9 +208,20 @@ private:
             natpmp_ = std::make_unique<tr_natpmp>(bind_interface);
         }
 
+        // UPnP discovery and the gateway it found belong to the previous interface
+        if (upnp_ != nullptr && upnp_bind_interface_ != bind_interface)
+        {
+            // a disabled pulse releases any mapping and leaves the handle safe to close
+            tr_upnpPulse(upnp_, mediator_.advertised_peer_port(), mediator_.local_peer_port(), false, false, {});
+            tr_upnpClose(upnp_);
+            upnp_ = nullptr;
+            upnp_state_ = TR_PORT_UNMAPPED;
+        }
+
         if (upnp_ == nullptr)
         {
             upnp_ = tr_upnpInit();
+            upnp_bind_interface_ = bind_interface;
         }
 
         auto const old_state = state();
@@ -205,13 +238,14 @@ private:
                     fmt::arg("public_port", result.advertised_port.host())));
         }
 
+        auto const upnp_is_enabled = is_enabled && (!is_interface_bound || is_upnp_interface_name(bind_interface));
         auto const upnp_bindaddr = is_interface_bound ? std::string{ bind_interface } :
                                                         mediator_.incoming_peer_address().display_name();
         upnp_state_ = tr_upnpPulse(
             upnp_,
             mediator_.advertised_peer_port(),
             mediator_.local_peer_port(),
-            is_enabled,
+            upnp_is_enabled,
             do_check,
             upnp_bindaddr);
 
@@ -235,6 +269,7 @@ private:
     tr_port_forwarding_state upnp_state_ = TR_PORT_UNMAPPED;
 
     tr_upnp* upnp_ = nullptr;
+    std::string upnp_bind_interface_;
     std::unique_ptr<tr_natpmp> natpmp_;
 
     std::unique_ptr<tr::Timer> timer_;
