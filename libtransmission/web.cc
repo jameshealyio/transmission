@@ -583,6 +583,22 @@ public:
         auto const* const task = static_cast<Task const*>(vtask);
         TR_ASSERT(std::this_thread::get_id() == task->impl.curl_thread->get_id());
 
+        // Scope the socket to the bound interface like every other socket, and fail the
+        // request if that is impossible. CURLOPT_INTERFACE alone can fall back to binding
+        // the interface's address, which does not keep traffic on the interface.
+        if (auto const bind_interface = task->bind_interface(); !std::empty(bind_interface))
+        {
+            auto ss = sockaddr_storage{};
+            auto sslen = socklen_t{ sizeof(ss) };
+            auto const type = getsockname(fd, reinterpret_cast<sockaddr*>(&ss), &sslen) == 0 && ss.ss_family == AF_INET6 ?
+                TR_AF_INET6 :
+                TR_AF_INET;
+            if (!tr_netSetSocketInterface(fd, type, bind_interface))
+            {
+                return CURL_SOCKOPT_ERROR;
+            }
+        }
+
         // Ignore the sockopt() return values -- these are suggestions
         // rather than hard requirements & it's OK for them to fail
 
