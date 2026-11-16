@@ -1116,7 +1116,7 @@ public:
     }
 
     void close_connections();
-    void close_torrent_connections(tr_torrent const* tor);
+    void close_torrent_connections(tr_torrent const* tor) const;
 
     tr_peerMgr(tr_peerMgr&&) = delete;
     tr_peerMgr(tr_peerMgr const&) = delete;
@@ -2584,7 +2584,7 @@ void tr_peerMgr::close_connections()
     }
 }
 
-void tr_peerMgr::close_torrent_connections(tr_torrent const* const tor)
+void tr_peerMgr::close_torrent_connections(tr_torrent const* const tor) const
 {
     using namespace disconnect_helpers;
 

@@ -58,11 +58,11 @@ public:
     public:
         struct TorrentInfo
         {
-            tr_sha1_digest_t info_hash;
-            tr_peer_id_t client_peer_id;
-            tr_torrent_id_t id;
-            bool is_done;
-            bool is_running;
+            tr_sha1_digest_t info_hash = {};
+            tr_peer_id_t client_peer_id = {};
+            tr_torrent_id_t id = {};
+            bool is_done = false;
+            bool is_running = false;
             bool allows_dht = true;
             bool allows_incoming_peer = true;
         };

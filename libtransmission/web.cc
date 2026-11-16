@@ -636,7 +636,7 @@ public:
         return 0;
     }
 
-    void initEasy(Task& task)
+    void initEasy(Task& task) const
     {
         TR_ASSERT(std::this_thread::get_id() == curl_thread->get_id());
         auto* const e = task.easy();
@@ -983,12 +983,12 @@ public:
     std::list<Task> queued_tasks_;
     std::list<Task> running_tasks_;
 
-    CURLSH* shared()
+    [[nodiscard]] CURLSH* shared() const
     {
         return curlsh_.get();
     }
 
-    void share_setopt()
+    void share_setopt() const
     {
         // Do *not* share HSTS cache
         // https://github.com/transmission/transmission/issues/5199

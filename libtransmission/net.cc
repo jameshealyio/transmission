@@ -184,7 +184,7 @@ bool tr_netSetSocketInterface(
 #ifdef __linux__
             auto const hint = err == EPERM ? "; Linux kernels older than 5.7 need CAP_NET_RAW"sv : ""sv;
 #else
-            auto constexpr hint = ""sv;
+            auto const hint = ""sv;
 #endif
             tr_logAddWarn(
                 fmt::format("Couldn't bind socket to interface '{}': {} ({}){}", name, tr_net_strerror(err), err, hint));
