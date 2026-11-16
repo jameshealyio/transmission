@@ -11,6 +11,8 @@
 
 #include <ctime> // time_t
 #include <cstdint>
+#include <string>
+#include <string_view>
 
 #include "natpmp.h"
 
@@ -20,7 +22,8 @@
 class tr_natpmp
 {
 public:
-    tr_natpmp()
+    explicit tr_natpmp(std::string_view bind_interface = {})
+        : bind_interface_{ bind_interface }
     {
         natpmp_.s = static_cast<decltype(natpmp_.s)>(TR_BAD_SOCKET);
     }
@@ -34,6 +37,11 @@ public:
     tr_natpmp(tr_natpmp&&) = delete;
     tr_natpmp& operator=(tr_natpmp const&) = delete;
     tr_natpmp& operator=(tr_natpmp&&) = delete;
+
+    [[nodiscard]] constexpr auto const& bind_interface() const noexcept
+    {
+        return bind_interface_;
+    }
 
     [[nodiscard]] constexpr auto renewTime() const noexcept
     {
@@ -67,10 +75,13 @@ private:
     static constexpr auto CommandWaitSecs = time_t{ 8 };
 
     [[nodiscard]] bool canSendCommand() const;
+    [[nodiscard]] bool scope_to_bind_interface();
 
     void setCommandTime();
 
     natpmp_t natpmp_ = {};
+
+    std::string bind_interface_;
 
     tr_port local_port_;
     tr_port advertised_port_;
