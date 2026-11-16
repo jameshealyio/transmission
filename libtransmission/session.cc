@@ -309,6 +309,21 @@ void tr_session::LpdMediator::setNextAnnounceTime(std::string_view info_hash_str
 
 // ---
 
+bool tr_session::torrent_uses_session_interface(tr_sha1_digest_t const& info_hash, std::string_view bind_interface) const
+{
+    if (auto const* const tor = torrents().get(info_hash); tor != nullptr)
+    {
+        return tor->bind_interface_matches_session();
+    }
+
+    // the torrent is gone, so go by its setting as the caller last saw it; empty inherits the session's
+    bind_interface = tr_strv_strip(bind_interface);
+    return std::empty(bind_interface) ||
+        tr_net_effective_bind_interface(bind_interface) == tr_net_effective_bind_interface(this->bind_interface());
+}
+
+// ---
+
 std::optional<std::string> tr_session::WebMediator::cookieFile() const
 {
     auto const path = tr_pathbuf{ session_->configDir(), "/cookies.txt"sv };

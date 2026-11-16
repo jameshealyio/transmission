@@ -201,8 +201,7 @@ public:
         }
         else if (tr_strv_starts_with(announce_sv, "udp://"sv))
         {
-            if (auto const* const tor = session->torrents().get(request.info_hash);
-                tor != nullptr && !tor->bind_interface_matches_session())
+            if (!session->torrent_uses_session_interface(request.info_hash, request.bind_interface))
             {
                 tr_logAddWarn(
                     fmt::format(
@@ -1426,6 +1425,13 @@ void multiscrape(tr_announcer_impl* announcer, std::vector<tr_tier*> const& tier
     // batch as many info_hashes into a request as we can
     for (auto* tier : tiers)
     {
+        // A scrape carries many torrents' info hashes on one connection, scoped to the session's
+        // bind_interface. Torrents bound elsewhere get their peer counts from their announces.
+        if (!tier->tor->bind_interface_matches_session())
+        {
+            continue;
+        }
+
         auto const* const current_tracker = tier->currentTracker();
         TR_ASSERT(current_tracker != nullptr);
         if (current_tracker == nullptr)

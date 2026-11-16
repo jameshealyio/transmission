@@ -165,6 +165,11 @@ private:
             return tr_address::from_string(session_.announceIP());
         }
 
+        [[nodiscard]] bool allows_shared_udp(tr_sha1_digest_t const& info_hash, std::string_view bind_interface) const override
+        {
+            return session_.torrent_uses_session_interface(info_hash, bind_interface);
+        }
+
     private:
         tr_session& session_;
     };
@@ -629,6 +634,11 @@ public:
     {
         return settings().bind_interface;
     }
+
+    // Whether a torrent's traffic may use the session's shared sockets, which carry only the
+    // session's bind_interface. `bind_interface` is the torrent's own setting as the caller
+    // last saw it, and decides for a torrent that has since been removed.
+    [[nodiscard]] bool torrent_uses_session_interface(tr_sha1_digest_t const& info_hash, std::string_view bind_interface) const;
 
     [[nodiscard]] constexpr auto const& peerCongestionAlgorithm() const noexcept
     {

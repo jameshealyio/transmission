@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <ranges>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -232,6 +233,7 @@ struct tau_announce_request
         tr_announce_request const& in,
         std::shared_ptr<tau_announce_data> data)
         : ip_protocol{ ip_protocol_in }
+        , bind_interface{ in.bind_interface }
         , data_{ std::move(data) }
     {
         // https://www.bittorrent.org/beps/bep_0015.html sets key size at 32 bits
@@ -328,6 +330,7 @@ struct tau_announce_request
     PayloadBuffer payload;
 
     tr_address_type const ip_protocol;
+    std::string const bind_interface; // the torrent's own setting when the request was made
     time_t sent_at = 0;
     tau_transaction_t const transaction_id = tau_transaction_new();
 
@@ -597,6 +600,14 @@ private:
         {
             auto& req = *it;
 
+            // a torrent's bind_interface may have changed while the request waited for the tracker's address
+            if (req.sent_at == 0 && !allows_shared_udp(req))
+            {
+                req.fail(false, false, _("UDP tracker disabled by torrent bind_interface override"));
+                it = reqs.erase(it);
+                continue;
+            }
+
             if (req.sent_at != 0 || // it's already been sent; we're awaiting a response
                 !maybe_send_request(req.ip_protocol, std::data(req.payload), std::size(req.payload), now))
             {
@@ -615,6 +626,17 @@ private:
             // no response needed, so we can remove it now
             it = reqs.erase(it);
         }
+    }
+
+    [[nodiscard]] bool allows_shared_udp(tau_announce_request const& req) const
+    {
+        return mediator_.allows_shared_udp(req.response.info_hash, req.bind_interface);
+    }
+
+    [[nodiscard]] bool allows_shared_udp(tau_scrape_request const& req) const
+    {
+        auto const rows = std::span{ req.response.rows }.first(req.response.row_count);
+        return std::ranges::all_of(rows, [this](auto const& row) { return mediator_.allows_shared_udp(row.info_hash, {}); });
     }
 
     bool maybe_send_request(tr_address_type ip_protocol, std::byte const* payload, size_t payload_len, time_t now)
