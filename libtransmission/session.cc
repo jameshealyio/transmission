@@ -952,6 +952,8 @@ void tr_session::setSettings(tr_session::Settings&& settings_in, bool force)
         force || !dht_ || port_changed || addr_changed || interface_changed ||
         new_settings.dht_enabled != old_settings.dht_enabled)
     {
+        // the DHT library is a singleton: uninitialize the old node before the new one initializes
+        dht_.reset();
         dht_ = tr_dht::create(dht_mediator_, advertisedPeerPort(), udp_core_->socket4(), udp_core_->socket6());
     }
 
