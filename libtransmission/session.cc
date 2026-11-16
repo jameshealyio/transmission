@@ -467,20 +467,18 @@ tr_address tr_session::bind_address(tr_address_type type) const noexcept
     if (type == TR_AF_INET6)
     {
         // if user provided an address, use it.
-        if (!std::empty(settings_.bind_address_ipv6))
-        {
-            return tr_address::from_string(settings_.bind_address_ipv6).value_or(tr_address::any(TR_AF_INET6));
-        }
-        if (!tr_net_interface_is_default(settings_.bind_interface))
-        {
-            return tr_address::any(TR_AF_INET6);
-        }
-
+        // otherwise, if bound to an interface, use any_ipv6 (::) and let the interface pick the source.
         // otherwise, if we can determine which one to use via global_source_address(ipv6) magic, use it.
         // otherwise, use any_ipv6 (::).
-        auto const source_addr = source_address(type);
-        auto const default_addr = source_addr && source_addr->is_global_unicast() ? *source_addr : tr_address::any(TR_AF_INET6);
-        return default_addr;
+        auto default_addr = tr_address::any(TR_AF_INET6);
+        if (tr_net_interface_is_default(settings_.bind_interface))
+        {
+            if (auto const source_addr = source_address(type); source_addr && source_addr->is_global_unicast())
+            {
+                default_addr = *source_addr;
+            }
+        }
+        return tr_address::from_string(settings_.bind_address_ipv6).value_or(default_addr);
     }
 
     TR_ASSERT_MSG(false, "invalid type");
