@@ -80,7 +80,8 @@ public:
         tr_bandwidth* parent,
         tr_socket_address const& socket_address,
         tr_sha1_digest_t const& info_hash,
-        bool client_is_seed);
+        bool client_is_seed,
+        std::string_view bind_interface);
 
     static std::shared_ptr<tr_peerIo> new_incoming(
         tr_session* session,

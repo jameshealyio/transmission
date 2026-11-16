@@ -180,7 +180,8 @@ std::shared_ptr<tr_peerIo> tr_peerIo::new_outgoing_utp(
     tr_bandwidth* parent,
     tr_socket_address const& socket_address,
     tr_sha1_digest_t const& info_hash,
-    bool client_is_seed)
+    bool client_is_seed,
+    std::string_view const bind_interface)
 {
     TR_ASSERT(session != nullptr);
     TR_ASSERT(socket_address.is_valid());
@@ -196,7 +197,10 @@ std::shared_ptr<tr_peerIo> tr_peerIo::new_outgoing_utp(
         return {};
     }
 
-    return tr_peerIo::create(session, std::move(socket), parent, &info_hash, false, client_is_seed);
+    // reconnect() falls back to TCP, which must use the same interface
+    auto io = tr_peerIo::create(session, std::move(socket), parent, &info_hash, false, client_is_seed);
+    io->bind_interface_ = bind_interface;
+    return io;
 }
 
 tr_peerIo::~tr_peerIo()

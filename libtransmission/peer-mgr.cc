@@ -3116,7 +3116,13 @@ void tr_peerMgrConnectHolepunch(tr_torrent* tor, tr_socket_address const& endpoi
     // blocklist, and peer-limit checks.
     tr_logAddDebugTor(tor, fmt::format("BEP 55: initiating uTP holepunch connect to {}", endpoint.display_name()));
 
-    auto peer_io = tr_peerIo::new_outgoing_utp(session, &session->top_bandwidth_, endpoint, tor->info_hash(), tor->is_seed());
+    auto peer_io = tr_peerIo::new_outgoing_utp(
+        session,
+        &session->top_bandwidth_,
+        endpoint,
+        tor->info_hash(),
+        tor->is_seed(),
+        tor->effective_bind_interface());
 
     if (!peer_io)
     {
