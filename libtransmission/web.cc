@@ -19,8 +19,10 @@
 #include <memory>
 #include <ranges>
 #include <mutex>
+#include <optional>
 #include <stack>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -270,6 +272,7 @@ public:
         Task(tr_web::Impl& impl_in, tr_web::FetchOptions&& options_in)
             : impl{ impl_in }
             , options_{ std::move(options_in) }
+            , session_bind_interface_{ impl.mediator.bind_interface() }
         {
             auto const parsed = tr_urlParse(options_.url);
             easy_ = parsed ? impl.get_easy(parsed->host) : nullptr;
@@ -349,19 +352,19 @@ public:
             }
         }
 
+        // A per-torrent override, including "default", takes precedence over the session setting.
+        [[nodiscard]] std::string_view bind_interface() const
+        {
+            auto const& bind_interface = options_.bind_interface ? options_.bind_interface : session_bind_interface_;
+            return bind_interface ? tr_net_effective_bind_interface(*bind_interface) : std::string_view{};
+        }
+
         [[nodiscard]] auto curl_interface() const
         {
-            if (options_.bind_interface)
+            // when no interface is bound, fall back to the configured bind address
+            if (auto curl_interface = tr_netCurlInterfaceString(bind_interface()); curl_interface)
             {
-                return tr_netCurlInterfaceString(*options_.bind_interface);
-            }
-
-            if (auto const bind_interface = impl.mediator.bind_interface(); bind_interface)
-            {
-                if (auto const curl_interface = tr_netCurlInterfaceString(*bind_interface); curl_interface)
-                {
-                    return curl_interface;
-                }
+                return curl_interface;
             }
 
             switch (options_.ip_proto)
@@ -433,6 +436,8 @@ public:
         }
 
         tr_web::FetchOptions options_;
+
+        std::optional<std::string> session_bind_interface_;
 
         CURL* easy_;
     };
