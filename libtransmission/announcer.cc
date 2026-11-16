@@ -88,10 +88,13 @@ struct StopsCompare
         return tr_compare_3way(one.announce_url, two.announce_url);
     }
 
+    // Suppress STL-instantiation noise from MSVC xutility noexcept(bool(...)).
+    // NOLINTBEGIN(readability-redundant-casting)
     [[nodiscard]] constexpr auto operator()(tr_announce_request const& one, tr_announce_request const& two) const noexcept
     {
         return compare(one, two) < 0;
     }
+    // NOLINTEND(readability-redundant-casting)
 };
 
 } // namespace
@@ -198,8 +201,7 @@ public:
         }
         else if (tr_strv_starts_with(announce_sv, "udp://"sv))
         {
-            if (auto const* const tor = session->torrents().get(request.info_hash);
-                tor != nullptr && !tor->bind_interface_matches_session())
+            if (!session->torrent_uses_session_interface(request.info_hash, request.bind_interface))
             {
                 tr_logAddWarn(
                     fmt::format(
@@ -877,16 +879,16 @@ auto tier_announce_event_pull(tr_tier* tier)
     return e;
 }
 
-bool isUnregistered(char const* errmsg)
+bool isUnregistered(std::string_view errmsg)
 {
-    auto const lower = tr_strlower(errmsg != nullptr ? errmsg : "");
+    auto const lower = tr_strlower(errmsg);
 
-    auto constexpr Keys = std::array<std::string_view, 2>{ "unregistered torrent"sv, "torrent not registered"sv };
+    auto constexpr Keys = std::array{ "unregistered torrent"sv, "torrent not registered"sv };
 
     return std::ranges::any_of(Keys, [&lower](auto const& key) { return tr_strv_contains(lower, key); });
 }
 
-void on_announce_error(tr_tier* tier, char const* err, tr_announce_event e, time_t interval = {})
+void on_announce_error(tr_tier* tier, std::string_view err, tr_announce_event e, time_t interval = {})
 {
     using namespace announce_helpers;
 
@@ -1029,11 +1031,11 @@ void tr_announcer_impl::onAnnounceDone(
             response.downloads.value_or(-1),
             response.interval,
             response.min_interval,
-            (!std::empty(response.tracker_id) ? response.tracker_id.c_str() : "none"),
+            !std::empty(response.tracker_id) ? response.tracker_id : "none"sv,
             std::size(response.pex),
             std::size(response.pex6),
-            (!std::empty(response.errmsg) ? response.errmsg.c_str() : "none"),
-            (!std::empty(response.warning) ? response.warning.c_str() : "none")));
+            !std::empty(response.errmsg) ? response.errmsg : "none"sv,
+            !std::empty(response.warning) ? response.warning : "none"sv));
 
     // https://github.com/arvidn/libtorrent/issues/5084#issuecomment-688516452
     if (response.min_interval != 0)
@@ -1078,7 +1080,7 @@ void tr_announcer_impl::onAnnounceDone(
 
         on_announce_error(
             tier,
-            response.errmsg.c_str(),
+            response.errmsg,
             event,
             response.interval > time_t{} ? response.interval : response.min_interval);
     }
@@ -1263,7 +1265,7 @@ namespace on_scrape_done_helpers
     return std::ranges::any_of(too_long_errors, [&errmsg](auto const& substr) { return tr_strv_contains(errmsg, substr); });
 }
 
-void on_scrape_error(tr_session const* /*session*/, tr_tier* tier, char const* errmsg)
+void on_scrape_error(tr_session const* /*session*/, tr_tier* tier, std::string_view errmsg)
 {
     if (auto* const current_tracker = tier->currentTracker(); current_tracker != nullptr)
     {
@@ -1279,7 +1281,7 @@ void on_scrape_error(tr_session const* /*session*/, tr_tier* tier, char const* e
     }
 
     // set the error message
-    tier->last_scrape_str = errmsg != nullptr ? errmsg : "";
+    tier->last_scrape_str = errmsg;
     tier->lastScrapeSucceeded = false;
 
     // switch to the next tracker
@@ -1386,7 +1388,7 @@ void tr_announcer_impl::onScrapeDone(tr_scrape_response const& response)
         }
         else if (!std::empty(response.errmsg))
         {
-            on_scrape_error(session, tier, response.errmsg.c_str());
+            on_scrape_error(session, tier, response.errmsg);
         }
         else
         {
@@ -1423,6 +1425,13 @@ void multiscrape(tr_announcer_impl* announcer, std::vector<tr_tier*> const& tier
     // batch as many info_hashes into a request as we can
     for (auto* tier : tiers)
     {
+        // A scrape carries many torrents' info hashes on one connection, scoped to the session's
+        // bind_interface. Torrents bound elsewhere get their peer counts from their announces.
+        if (!tier->tor->bind_interface_matches_session())
+        {
+            continue;
+        }
+
         auto const* const current_tracker = tier->currentTracker();
         TR_ASSERT(current_tracker != nullptr);
         if (current_tracker == nullptr)
@@ -1598,11 +1607,14 @@ void scrapeAndAnnounceMore(tr_announcer_impl* announcer)
      * available, use compareAnnounceTiers to prioritize. */
     if (announce_me.size() > MaxAnnouncesPerUpkeep)
     {
+        // Suppress STL-instantiation noise from MSVC xutility noexcept(bool(...)).
+        // NOLINTBEGIN(readability-redundant-casting)
         std::partial_sort(
             std::begin(announce_me),
             std::begin(announce_me) + MaxAnnouncesPerUpkeep,
             std::end(announce_me),
             [](auto const* a, auto const* b) { return compareAnnounceTiers(a, b) < 0; });
+        // NOLINTEND(readability-redundant-casting)
         announce_me.resize(MaxAnnouncesPerUpkeep);
     }
 

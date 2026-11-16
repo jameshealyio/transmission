@@ -977,3 +977,112 @@ TEST_F(NetTest, IPv4MappedAddress)
         EXPECT_EQ(native_sv, native->display_name());
     }
 }
+
+TEST_F(NetTest, isValidForPeers)
+{
+    static auto constexpr Tests = std::array<std::pair<std::string_view, bool>, 13>{ {
+        { "1.2.3.4:6881"sv, true },
+        { "[2001:db8::1]:6881"sv, true },
+        { "0.0.0.0:6881"sv, false }, // "this network"
+        { "0.1.2.3:6881"sv, false }, // "this network"
+        { "[::]:6881"sv, false }, // unspecified
+        { "224.0.0.1:6881"sv, false }, // multicast
+        { "239.255.255.255:6881"sv, false }, // multicast
+        { "[ff02::1]:6881"sv, false }, // multicast
+        { "[fe80::1]:6881"sv, false }, // link-local
+        { "[::ffff:1.2.3.4]:6881"sv, false }, // ipv4-mapped
+        { "[::ffff:127.0.0.1]:6881"sv, false }, // ipv4-mapped
+        { "127.0.0.1:6881"sv, false }, // loopback, see LoopbackTests
+        { "[::1]:6881"sv, false }, // loopback, see LoopbackTests
+    } };
+
+    for (auto const& [presentation, expected] : Tests)
+    {
+        auto const socket_address = tr_socket_address::from_string(presentation);
+        ASSERT_TRUE(socket_address.has_value()) << presentation;
+        EXPECT_EQ(expected, socket_address->is_valid_for_peers(TR_PEER_FROM_TRACKER)) << presentation;
+    }
+
+    // a peer address without a port is useless
+    {
+        auto const address = tr_address::from_string("1.2.3.4"sv);
+        ASSERT_TRUE(address.has_value());
+        EXPECT_FALSE(tr_socket_address(*address, tr_port{}).is_valid_for_peers(TR_PEER_FROM_TRACKER));
+    }
+
+    // loopback peers are only accepted from sources that can legitimately name them
+    static auto constexpr LoopbackTests = std::array<std::pair<tr_peer_from, bool>, 8>{ {
+        { TR_PEER_FROM_INCOMING, true },
+        { TR_PEER_FROM_LPD, true },
+        { TR_PEER_FROM_RESUME, true },
+        { TR_PEER_FROM_TRACKER, false },
+        { TR_PEER_FROM_DHT, false },
+        { TR_PEER_FROM_PEX, false },
+        { TR_PEER_FROM_LTEP, false },
+        { TR_PEER_FROM_HOLEPUNCH, false },
+    } };
+
+    for (auto const& presentation : { "127.0.0.1:6881"sv, "[::1]:6881"sv })
+    {
+        auto const socket_address = tr_socket_address::from_string(presentation);
+        ASSERT_TRUE(socket_address.has_value()) << presentation;
+
+        for (auto const& [from, expected] : LoopbackTests)
+        {
+            EXPECT_EQ(expected, socket_address->is_valid_for_peers(from)) << presentation << " from " << from;
+        }
+    }
+}
+
+TEST_F(NetTest, bindInterface)
+{
+#if defined(__APPLE__)
+    static auto constexpr LoopbackInterface = "lo0"sv;
+#elif defined(__linux__)
+    static auto constexpr LoopbackInterface = "lo"sv;
+#else
+    static auto constexpr LoopbackInterface = std::string_view{};
+#endif
+    static auto constexpr MissingInterface = "trnosuchif0"sv;
+
+    auto const loopback = tr_address::from_string("127.0.0.1");
+    ASSERT_TRUE(loopback.has_value());
+
+    // an empty or "default" value leaves the socket alone
+    auto sock = socket(AF_INET, SOCK_DGRAM, 0);
+    ASSERT_TRUE(is_valid_socket(sock));
+    EXPECT_TRUE(tr_netSetSocketInterface(sock, TR_AF_INET, ""sv, true));
+    EXPECT_TRUE(tr_netSetSocketInterface(sock, TR_AF_INET, "default"sv, true));
+
+    // a missing interface must fail rather than fall back to normal routing
+    EXPECT_FALSE(tr_net_bind_interface_index(MissingInterface));
+    EXPECT_FALSE(tr_net_bind_interface_index("0.0.0.0"sv));
+    EXPECT_FALSE(tr_netSetSocketInterface(sock, TR_AF_INET, MissingInterface, true));
+    EXPECT_EQ(TR_BAD_SOCKET, tr_netBindTCP(*loopback, tr_port::from_host(0), true, MissingInterface));
+
+    if (std::empty(LoopbackInterface))
+    {
+        // interface binding is not supported on this platform, so it must fail closed
+        EXPECT_FALSE(tr_netSetSocketInterface(sock, TR_AF_INET, "lo0"sv, true));
+        tr_net_close_socket(sock);
+        return;
+    }
+
+    EXPECT_TRUE(tr_net_bind_interface_index(LoopbackInterface));
+
+    auto const bound = tr_netSetSocketInterface(sock, TR_AF_INET, LoopbackInterface, true);
+    auto const err = sockerrno;
+    tr_net_close_socket(sock);
+    if (!bound && err == EPERM)
+    {
+        GTEST_SKIP() << "binding to an interface needs CAP_NET_RAW on Linux kernels older than 5.7";
+    }
+    EXPECT_TRUE(bound);
+
+    sock = tr_netBindTCP(*loopback, tr_port::from_host(0), true, LoopbackInterface);
+    EXPECT_TRUE(is_valid_socket(sock));
+    if (is_valid_socket(sock))
+    {
+        tr_net_close_socket(sock);
+    }
+}

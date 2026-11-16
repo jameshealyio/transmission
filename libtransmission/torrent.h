@@ -683,6 +683,12 @@ struct tr_torrent
         return this->is_public() && this->session->allowsLPD();
     }
 
+    // BEP 55 uses the session's shared UDP socket, which only carries the session's bind_interface
+    [[nodiscard]] auto allows_holepunch() const noexcept
+    {
+        return this->is_public() && this->session->allowsUTP() && bind_interface_matches_session();
+    }
+
     [[nodiscard]] constexpr bool client_can_download() const
     {
         return this->is_piece_transfer_allowed(tr_direction::PeerToClient);

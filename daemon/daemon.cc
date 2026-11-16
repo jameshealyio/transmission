@@ -141,7 +141,7 @@ auto constexpr Options = std::array<tr_option, 49>{ {
     { 'I', "bind-address-ipv6", "Where to listen for peer connections", "I", Arg::Required, "<ipv6 addr>" },
     { 996,
       "bind-interface",
-      "Network interface for BitTorrent and tracker traffic on supported platforms",
+      "Network interface for BitTorrent and tracker traffic (macOS and Linux)",
       nullptr,
       Arg::Required,
       "<ifname>" },
@@ -368,11 +368,9 @@ void printMessage(
 
 void pumpLogMessages(FILE* log_stream)
 {
-    tr_log_message* list = tr_logGetQueue();
-
-    for (tr_log_message const* l = list; l != nullptr; l = l->next)
+    for (auto const& l : tr_logGetQueue())
     {
-        printMessage(log_stream, l->when, l->level, l->name, l->message, l->file, l->line);
+        printMessage(log_stream, l.when, l.level, l.name, l.message, l.file, l.line);
     }
 
     // two reasons to not flush stderr:
@@ -382,8 +380,6 @@ void pumpLogMessages(FILE* log_stream)
     {
         fflush(log_stream);
     }
-
-    tr_logFreeQueue(list);
 }
 
 void periodic_update(evutil_socket_t /*fd*/, short /*what*/, void* arg)
@@ -867,6 +863,19 @@ int tr_daemon::start([[maybe_unused]] bool foreground)
             return TR_RPC_OK;
         });
     tr_logAddInfo(fmt::format(fmt::runtime(_("Loading settings from '{path}'")), fmt::arg("path", config_dir_)));
+
+    // A warning, not a failure: see tr_sessionOwnsConfigDir() for why this is
+    // not proof of a second session.
+    if (!tr_sessionOwnsConfigDir(session))
+    {
+        tr_logAddWarn(
+            fmt::format(
+                fmt::runtime(
+                    _("Couldn't claim '{path}'. If another Transmission session is using it, the two will "
+                      "overwrite each other's settings, resume files and stats.")),
+                fmt::arg("path", config_dir_)));
+    }
+
     tr_sessionSaveSettings(session, config_dir_, settings_);
 
     auto const* const settings_map = settings_.get_if<tr_variant::Map>();

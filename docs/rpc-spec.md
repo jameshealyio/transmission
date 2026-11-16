@@ -250,7 +250,7 @@ The 'source' column here corresponds to the data structure there.
 | `desired_available`| number| tr_stat
 | `done_date`| number | tr_stat
 | `download_dir` | string  | tr_torrent
-| `integer` | number  | tr_stat
+| `downloaded_ever` | integer  | tr_stat
 | `download_limit` | integer  | tr_torrent
 | `download_limited` | boolean | tr_torrent
 | `edit_date` | number | tr_stat
@@ -366,6 +366,7 @@ Files are returned in the order they are laid out in the torrent. References to 
 | `progress`             | double     | tr_peer_stat
 | `rate_to_client` (B/s) | number     | tr_peer_stat
 | `rate_to_peer` (B/s)   | number     | tr_peer_stat
+| `supports_holepunch`   | boolean    | tr_peer_stat
 
 `peers_from`: an object containing:
 
@@ -373,6 +374,7 @@ Files are returned in the order they are laid out in the torrent. References to 
 |:--|:--|:--
 | `from_cache`    | number     | tr_stat
 | `from_dht`      | number     | tr_stat
+| `from_holepunch` | number   | tr_stat
 | `from_incoming` | number     | tr_stat
 | `from_lpd`      | number     | tr_stat
 | `from_ltep`     | number     | tr_stat
@@ -581,7 +583,7 @@ Response parameters: `path`, `name`, and `id`, holding the torrent ID integer
 | `alt_speed_time_end` | number | when to turn off alt speeds (units: same)
 | `alt_speed_up` | number | max global upload speed (kB/s)
 | `anti_brute_force_enabled` | boolean | true means to enable a basic brute force protection for RPC server
-| `bind_interface` | string | session network interface binding; empty means normal OS routing
+| `bind_interface` | string | session network interface binding (macOS and Linux); empty means normal OS routing
 | `blocklist_enabled` | boolean | true means enabled
 | `blocklist_size` | number | number of rules in the blocklist
 | `blocklist_url` | string | location of the blocklist to use for `blocklist_update`
@@ -1123,6 +1125,8 @@ Transmission 4.2.0 (`rpc_version_semver` 6.1.0, `rpc_version`: ?)
 
 | Method | Description
 |:---|:---
+| `torrent_get` | new arg `peers.supports_holepunch`
+| `torrent_get` | new arg `peers_from.from_holepunch`
 | `torrent_get` | new arg `webseeds_ex`
 | `torrent_get` | **DEPRECATED** `webseeds`. Use `webseeds_ex` instead.
 | `session_get` | **DEPRECATED** `cache_size_mib`. The memory cache is being removed, making this setting moot. The setting will still be gettable and settable via RPC `session_get` and `session_set` until Transmission 5.0.0 to avoid client breakage, but it will be otherwise unused in libtransmission. Clients should stop using this key.

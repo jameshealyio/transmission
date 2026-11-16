@@ -139,6 +139,17 @@ public:
         virtual ~Mediator() noexcept = default;
         virtual void sendto(void const* buf, size_t buflen, sockaddr const* addr, socklen_t addrlen) = 0;
         [[nodiscard]] virtual std::optional<tr_address> announce_ip() const = 0;
+
+        // Whether a request for this torrent may use the shared UDP socket, which carries only
+        // the session's bind_interface. Checked again when a queued request is sent.
+        // `bind_interface` is the torrent's own setting when the request was made. It decides
+        // for a torrent that has since been removed, as happens to a "stopped" announce.
+        [[nodiscard]] virtual bool allows_shared_udp(
+            [[maybe_unused]] tr_sha1_digest_t const& info_hash,
+            [[maybe_unused]] std::string_view bind_interface) const
+        {
+            return true;
+        }
         [[nodiscard]] virtual std::optional<tr_socket_address> dns_lookup(
             tr_address_type ip_protocol,
             std::string_view name,

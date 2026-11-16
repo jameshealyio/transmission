@@ -274,9 +274,11 @@ static NSString* TRDisplayableSessionBindInterface(NSString* bindInterface)
     [self updateBindInterfaceStatus];
 
     [self updatePortStatus];
-    self.fPortStatusTimer = [NSTimer scheduledTimerWithTimeInterval:5.0 target:self selector:@selector(updatePortStatus)
-                                                           userInfo:nil
-                                                            repeats:YES];
+
+    __weak __auto_type weakSelf = self;
+    self.fPortStatusTimer = [NSTimer scheduledTimerWithTimeInterval:5.0 repeats:YES block:^(NSTimer* _Nonnull timer) {
+        [weakSelf updatePortStatus];
+    }];
 
     //set peer connections
     self.fPeersGlobalField.integerValue = [self.fDefaults integerForKey:@"PeersTotal"];
@@ -515,7 +517,8 @@ static NSString* TRDisplayableSessionBindInterface(NSString* bindInterface)
                                                        action:@selector(showBindInterfaceInfo:)];
     self.fBindInterfaceInfoButton.bezelStyle = NSBezelStyleInline;
     self.fBindInterfaceInfoButton.bordered = NO;
-    self.fBindInterfaceInfoButton.toolTip = NSLocalizedString(@"Show details about the current bind connection.",
+    self.fBindInterfaceInfoButton.toolTip = NSLocalizedString(
+        @"Show details about the current bind connection.",
         "Preferences -> Network -> bind interface info tooltip");
     self.fBindInterfaceInfoButton.translatesAutoresizingMaskIntoConstraints = NO;
 

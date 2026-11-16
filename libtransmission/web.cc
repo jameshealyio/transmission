@@ -19,10 +19,13 @@
 #include <memory>
 #include <ranges>
 #include <mutex>
+#include <optional>
 #include <stack>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -218,6 +221,8 @@ public:
             this->user_agent = *ua;
         }
 
+        session_bind_interface_ = mediator.bind_interface();
+
         auto const lock = std::unique_lock{ tasks_mutex_ };
         curl_thread = std::make_unique<std::thread>(&Impl::curlThreadFunc, this);
     }
@@ -229,25 +234,41 @@ public:
 
     ~Impl()
     {
-        deadline_ns_ = to_ns(mediator.now());
-        queued_tasks_cv_.notify_one();
+        startShutdown(0ms);
         curl_thread->join();
     }
 
     void startShutdown(std::chrono::milliseconds deadline)
     {
-        deadline_ns_ = to_ns(mediator.now() + deadline);
+        // Set the deadline under the mutex.
+        // curlThreadFunc() tests the deadline to decide whether to sleep.
+        // An unsynchronized store could land between that test and the
+        // sleep and go unnoticed.
+        {
+            auto const lock = std::unique_lock{ tasks_mutex_ };
+            deadline_ns_ = to_ns(mediator.now() + deadline);
+        }
         queued_tasks_cv_.notify_one();
+    }
+
+    void on_bind_interface_changed()
+    {
+        auto bind_interface = mediator.bind_interface();
+
+        auto const lock = std::unique_lock{ tasks_mutex_ };
+        session_bind_interface_ = std::move(bind_interface);
+        session_bind_interface_changed_ = true;
     }
 
     void fetch(FetchOptions&& options)
     {
-        if (deadline_exists())
+        auto const lock = std::unique_lock{ tasks_mutex_ };
+
+        if (deadline_exists()) // no new tasks once shutdown has begun
         {
             return;
         }
 
-        auto const lock = std::unique_lock{ tasks_mutex_ };
         queued_tasks_.emplace_back(*this, std::move(options));
         queued_tasks_cv_.notify_one();
     }
@@ -263,6 +284,7 @@ public:
         Task(tr_web::Impl& impl_in, tr_web::FetchOptions&& options_in)
             : impl{ impl_in }
             , options_{ std::move(options_in) }
+            , session_bind_interface_{ impl.session_bind_interface_ } // fetch() holds tasks_mutex_
         {
             auto const parsed = tr_urlParse(options_.url);
             easy_ = parsed ? impl.get_easy(parsed->host) : nullptr;
@@ -342,19 +364,25 @@ public:
             }
         }
 
+        // Whether this request uses the session's bind_interface and was queued under a different value.
+        [[nodiscard]] bool is_on_previous_interface(std::optional<std::string> const& session_bind_interface) const
+        {
+            return !options_.bind_interface && session_bind_interface_ != session_bind_interface;
+        }
+
+        // A per-torrent override, including "default", takes precedence over the session setting.
+        [[nodiscard]] std::string_view bind_interface() const
+        {
+            auto const& bind_interface = options_.bind_interface ? options_.bind_interface : session_bind_interface_;
+            return bind_interface ? tr_net_effective_bind_interface(*bind_interface) : std::string_view{};
+        }
+
         [[nodiscard]] auto curl_interface() const
         {
-            if (options_.bind_interface)
+            // when no interface is bound, fall back to the configured bind address
+            if (auto curl_interface = tr_netCurlInterfaceString(bind_interface()); curl_interface)
             {
-                return tr_netCurlInterfaceString(*options_.bind_interface);
-            }
-
-            if (auto const bind_interface = impl.mediator.bind_interface(); bind_interface)
-            {
-                if (auto const curl_interface = tr_netCurlInterfaceString(*bind_interface); curl_interface)
-                {
-                    return curl_interface;
-                }
+                return curl_interface;
             }
 
             switch (options_.ip_proto)
@@ -417,6 +445,9 @@ public:
             if (auto const url = tr_urlParse(options_.url); url)
             {
                 curl_easy_reset(easy);
+                // curl_easy_reset() keeps the handle attached to the share object,
+                // and a share object cannot be destroyed while handles are attached
+                (void)curl_easy_setopt(easy, CURLOPT_SHARE, nullptr);
                 impl.easy_pool_[std::string{ url->host }].emplace(easy);
             }
             else
@@ -426,6 +457,8 @@ public:
         }
 
         tr_web::FetchOptions options_;
+
+        std::optional<std::string> session_bind_interface_;
 
         CURL* easy_;
     };
@@ -571,6 +604,22 @@ public:
         auto const* const task = static_cast<Task const*>(vtask);
         TR_ASSERT(std::this_thread::get_id() == task->impl.curl_thread->get_id());
 
+        // Scope the socket to the bound interface like every other socket, and fail the
+        // request if that is impossible. CURLOPT_INTERFACE alone can fall back to binding
+        // the interface's address, which does not keep traffic on the interface.
+        if (auto const bind_interface = task->bind_interface(); !std::empty(bind_interface))
+        {
+            auto ss = sockaddr_storage{};
+            auto sslen = socklen_t{ sizeof(ss) };
+            auto const type = getsockname(fd, reinterpret_cast<sockaddr*>(&ss), &sslen) == 0 && ss.ss_family == AF_INET6 ?
+                TR_AF_INET6 :
+                TR_AF_INET;
+            if (!tr_netSetSocketInterface(fd, type, bind_interface))
+            {
+                return CURL_SOCKOPT_ERROR;
+            }
+        }
+
         // Ignore the sockopt() return values -- these are suggestions
         // rather than hard requirements & it's OK for them to fail
 
@@ -587,7 +636,7 @@ public:
         return 0;
     }
 
-    void initEasy(Task& task)
+    void initEasy(Task& task) const
     {
         TR_ASSERT(std::this_thread::get_id() == curl_thread->get_id());
         auto* const e = task.easy();
@@ -679,6 +728,11 @@ public:
             (void)curl_easy_setopt(e, CURLOPT_ACCEPT_ENCODING, "identity");
             (void)curl_easy_setopt(e, CURLOPT_HTTP_CONTENT_DECODING, 0L);
 
+            // don't send a Referer when following redirects for webseed fragments.
+            // Some hosts ignore the Range header and reply 200 with the whole
+            // file when the request has a cross-site Referer.
+            (void)curl_easy_setopt(e, CURLOPT_AUTOREFERER, 0L);
+
             // set the range request
             auto const& [first, last] = *range;
             auto const str = fmt::format("{:d}-{:d}", first, last);
@@ -720,7 +774,11 @@ public:
     void remove_task(Task const& task)
     {
         auto const lock = std::unique_lock{ tasks_mutex_ };
+        remove_task_with_lock_held(task);
+    }
 
+    void remove_task_with_lock_held(Task const& task)
+    {
         auto const iter = std::ranges::find(running_tasks_, task);
         TR_ASSERT(iter != std::ranges::end(running_tasks_));
         if (iter == std::ranges::end(running_tasks_))
@@ -730,6 +788,45 @@ public:
 
         iter->done();
         running_tasks_.erase(iter);
+    }
+
+    // After the session's bind_interface changes, ends every running request and closes
+    // every connection. Left alone, idle connections would stay open on the previous
+    // interface, and libcurl lets a request that names no interface reuse a connection
+    // that is bound to one. The caller holds tasks_mutex_.
+    void restart_if_bind_interface_changed(curl_helpers::multi_unique_ptr& multi)
+    {
+        if (!session_bind_interface_changed_)
+        {
+            return;
+        }
+
+        session_bind_interface_changed_ = false;
+
+        while (!std::empty(running_tasks_))
+        {
+            auto& task = running_tasks_.front();
+            curl_multi_remove_handle(multi.get(), task.easy());
+            remove_task_with_lock_held(task);
+        }
+
+        // libcurl keeps its connections in the share object, or in the multi handle before 7.57
+        multi = make_multi();
+        curlsh_.reset(curl_share_init());
+        share_setopt();
+    }
+
+    [[nodiscard]] static curl_helpers::multi_unique_ptr make_multi()
+    {
+        auto multi = curl_helpers::multi_unique_ptr{ curl_multi_init() };
+#if LIBCURL_VERSION_NUM >= 0x071003 /* 7.16.3 */
+        (void)curl_multi_setopt(multi.get(), CURLMOPT_MAXCONNECTS, MaxCachedConnections);
+#endif
+#if LIBCURL_VERSION_NUM >= 0x071E00 /* 7.30.0 */
+        (void)curl_multi_setopt(multi.get(), CURLMOPT_MAX_TOTAL_CONNECTIONS, MaxTotalConnections);
+        (void)curl_multi_setopt(multi.get(), CURLMOPT_MAX_HOST_CONNECTIONS, MaxHostConnections);
+#endif
+        return multi;
     }
 
     void timeout_task(Task& task)
@@ -742,14 +839,7 @@ public:
     // the thread started by Impl.curl_thread runs this function
     void curlThreadFunc()
     {
-        auto const multi = curl_helpers::multi_unique_ptr{ curl_multi_init() };
-#if LIBCURL_VERSION_NUM >= 0x071003 /* 7.16.3 */
-        (void)curl_multi_setopt(multi.get(), CURLMOPT_MAXCONNECTS, MaxCachedConnections);
-#endif
-#if LIBCURL_VERSION_NUM >= 0x071E00 /* 7.30.0 */
-        (void)curl_multi_setopt(multi.get(), CURLMOPT_MAX_TOTAL_CONNECTIONS, MaxTotalConnections);
-        (void)curl_multi_setopt(multi.get(), CURLMOPT_MAX_HOST_CONNECTIONS, MaxHostConnections);
-#endif
+        auto multi = make_multi();
         auto const start_time = mediator.now();
 
         auto repeats = unsigned{};
@@ -765,42 +855,55 @@ public:
                 }
             }
 
-            if (deadline_exists() && is_idle())
-            {
-                break;
-            }
-
             if (auto lock = std::unique_lock{ tasks_mutex_ }; lock.owns_lock())
             {
-                // sleep until there's something to do
                 auto const stop_waiting = [this]()
                 {
-                    return !is_idle() || !deadline_exists();
+                    return !is_idle() || deadline_exists();
                 };
+
+                // A pending shutdown ends the wait so that the loop reaches
+                // the exit check below.
+                // The timeout keeps libcurl's connection cache serviced
+                // while no tasks are running.
+                static auto constexpr IdleUpkeepInterval = std::chrono::seconds{ 1 };
                 if (!stop_waiting())
                 {
-                    queued_tasks_cv_.wait(lock, stop_waiting);
+                    queued_tasks_cv_.wait_for(lock, IdleUpkeepInterval, stop_waiting);
                 }
 
-                // add queued tasks
-                if (!std::empty(queued_tasks_))
+                if (deadline_exists() && is_idle())
                 {
-                    for (auto& task : queued_tasks_)
+                    break;
+                }
+
+                // before starting the requests that were queued after a bind_interface change
+                restart_if_bind_interface_changed(multi);
+
+                // add queued tasks, except those queued before the session's bind_interface changed
+                for (auto it = std::begin(queued_tasks_); it != std::end(queued_tasks_);)
+                {
+                    if (it->is_on_previous_interface(session_bind_interface_))
                     {
-                        initEasy(task);
-                        curl_multi_add_handle(multi.get(), task.easy());
+                        it->done();
+                        it = queued_tasks_.erase(it);
+                        continue;
                     }
 
-                    running_tasks_.splice(std::end(running_tasks_), queued_tasks_);
+                    initEasy(*it);
+                    curl_multi_add_handle(multi.get(), it->easy());
+                    ++it;
                 }
+
+                running_tasks_.splice(std::end(running_tasks_), queued_tasks_);
             }
 
             resumePausedTasks();
 
-            // During steady state, wake up once per second.
-            // But during startup, wake up 10x more often. This is so tests
-            // that should take a few msec don't block for a full second
-            // while tr_session waits for this thread to finish.
+            // Poll the running tasks once per second during steady state.
+            // Poll 10x more often during startup, so that tests that should
+            // take a few msec don't block for a full second while
+            // tr_session waits for this thread to finish.
             static auto constexpr StartupSecs = std::chrono::seconds{ 15 };
             auto const timeout_ms = mediator.now() - start_time < StartupSecs ? 50 : 1000;
 
@@ -822,6 +925,13 @@ public:
             else
             {
                 repeats = 0;
+            }
+
+            // The session's bind_interface may have changed during the wait.
+            // Check right before the update below, which is what sends.
+            {
+                auto const lock = std::unique_lock{ tasks_mutex_ };
+                restart_if_bind_interface_changed(multi);
             }
 
             // nonblocking update of the tasks
@@ -858,21 +968,27 @@ public:
         }
     }
 
-    curl_helpers::shared_unique_ptr const curlsh_{ curl_share_init() };
+    curl_helpers::shared_unique_ptr curlsh_{ curl_share_init() };
 
     std::map<std::string /*host*/, std::stack<curl_helpers::easy_unique_ptr>, std::less<>> easy_pool_;
 
     std::mutex tasks_mutex_;
+
+    // The session's bind_interface as of the last on_bind_interface_changed().
+    // The setting itself belongs to another thread, so the curl thread reads this copy.
+    // Guarded by tasks_mutex_.
+    std::optional<std::string> session_bind_interface_;
+    bool session_bind_interface_changed_ = false;
     std::condition_variable queued_tasks_cv_;
     std::list<Task> queued_tasks_;
     std::list<Task> running_tasks_;
 
-    CURLSH* shared()
+    [[nodiscard]] CURLSH* shared() const
     {
         return curlsh_.get();
     }
 
-    void share_setopt()
+    void share_setopt() const
     {
         // Do *not* share HSTS cache
         // https://github.com/transmission/transmission/issues/5199
@@ -899,10 +1015,9 @@ tr_web::tr_web(Mediator& mediator)
 {
 }
 
-tr_web::~tr_web()
-{
-    impl_->startShutdown(0ms);
-}
+// ~Impl() itself starts an immediate shutdown before joining the curl
+// thread, so there's nothing to do here beyond destroying the members
+tr_web::~tr_web() = default;
 
 std::unique_ptr<tr_web> tr_web::create(Mediator& mediator)
 {
@@ -917,6 +1032,11 @@ void tr_web::fetch(FetchOptions&& options)
 void tr_web::startShutdown(std::chrono::milliseconds deadline)
 {
     impl_->startShutdown(deadline);
+}
+
+void tr_web::on_bind_interface_changed()
+{
+    impl_->on_bind_interface_changed();
 }
 
 bool tr_web::is_idle() const noexcept

@@ -121,9 +121,26 @@ std::string_view tr_net_effective_bind_interface(std::string_view const bind_int
     return tr_net_interface_is_default(name) ? std::string_view{} : name;
 }
 
+std::optional<unsigned> tr_net_bind_interface_index([[maybe_unused]] std::string_view const bind_interface)
+{
+#if defined(__APPLE__) || defined(__linux__)
+    // names of IFNAMSIZ or more are rejected so that SO_BINDTODEVICE cannot truncate them to another interface
+    if (auto const name = std::string{ tr_net_effective_bind_interface(bind_interface) };
+        !std::empty(name) && std::size(name) < IFNAMSIZ)
+    {
+        if (auto const index = if_nametoindex(name.c_str()); index != 0U)
+        {
+            return index;
+        }
+    }
+#endif
+
+    return {};
+}
+
 bool tr_netSetSocketInterface(
-    tr_socket_t const sock,
-    tr_address_type const type,
+    [[maybe_unused]] tr_socket_t const sock,
+    [[maybe_unused]] tr_address_type const type,
     std::string_view const bind_interface,
     bool const suppress_msgs)
 {
@@ -133,10 +150,9 @@ bool tr_netSetSocketInterface(
         return true;
     }
 
-#ifdef __APPLE__
-    auto const ifname = std::string{ name };
-    auto const if_index = if_nametoindex(ifname.c_str());
-    if (if_index == 0U)
+#if defined(__APPLE__) || defined(__linux__)
+    auto const if_index = tr_net_bind_interface_index(name);
+    if (!if_index)
     {
         set_sockerrno(ENXIO);
         if (!suppress_msgs)
@@ -146,15 +162,32 @@ bool tr_netSetSocketInterface(
         return false;
     }
 
+#if defined(__APPLE__)
+    // IP_BOUND_IF / IPV6_BOUND_IF scope the socket's route lookups to the interface,
+    // so traffic cannot follow a default route (e.g. a VPN tunnel) on another interface.
+    // Binding to the interface's address is not enough: macOS still routes by destination.
     auto const level = type == TR_AF_INET ? IPPROTO_IP : IPPROTO_IPV6;
     auto const option = type == TR_AF_INET ? IP_BOUND_IF : IPV6_BOUND_IF;
-    auto const index = static_cast<int>(if_index);
-    if (setsockopt(sock, level, option, reinterpret_cast<char const*>(&index), sizeof(index)) == -1)
+    auto const index = static_cast<int>(*if_index);
+    auto const ret = setsockopt(sock, level, option, reinterpret_cast<char const*>(&index), sizeof(index));
+#else
+    // SO_BINDTODEVICE does the same on Linux. It needs no privileges since kernel 5.7;
+    // older kernels require CAP_NET_RAW.
+    auto const ifname = std::string{ name };
+    auto const ret = setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, ifname.c_str(), static_cast<socklen_t>(std::size(ifname)));
+#endif
+    if (ret == -1)
     {
         if (!suppress_msgs)
         {
+            auto const err = sockerrno;
+#ifdef __linux__
+            auto const hint = err == EPERM ? "; Linux kernels older than 5.7 need CAP_NET_RAW"sv : ""sv;
+#else
+            auto const hint = ""sv;
+#endif
             tr_logAddWarn(
-                fmt::format("Couldn't bind socket to interface '{}': {} ({})", name, tr_net_strerror(sockerrno), sockerrno));
+                fmt::format("Couldn't bind socket to interface '{}': {} ({}){}", name, tr_net_strerror(err), err, hint));
         }
         return false;
     }
@@ -185,7 +218,7 @@ std::optional<std::string> tr_netCurlInterfaceString(std::string_view const bind
 
 void tr_netSetDiffServ([[maybe_unused]] tr_socket_t s, [[maybe_unused]] int tos, tr_address_type type)
 {
-    if (s == TR_BAD_SOCKET)
+    if (!is_valid_socket(s))
     {
         return;
     }
@@ -228,7 +261,7 @@ tr_socket_t tr_netBindTCPImpl(
     TR_ASSERT(addr.is_valid());
 
     auto const fd = socket(tr_ip_protocol_to_af(addr.type), SOCK_STREAM, 0);
-    if (fd == TR_BAD_SOCKET)
+    if (!is_valid_socket(fd))
     {
         *err_out = sockerrno;
         return TR_BAD_SOCKET;
@@ -331,7 +364,7 @@ std::optional<std::pair<tr_socket_address, tr_socket_t>> tr_netAccept(tr_session
     auto sock = sockaddr_storage{};
     socklen_t len = sizeof(struct sockaddr_storage);
     auto const sockfd = accept(listening_sockfd, reinterpret_cast<sockaddr*>(&sock), &len);
-    if (sockfd == TR_BAD_SOCKET)
+    if (!is_valid_socket(sockfd))
     {
         return {};
     }
@@ -354,26 +387,6 @@ void tr_net_close_socket(tr_socket_t sockfd)
 {
     evutil_closesocket(static_cast<evutil_socket_t>(sockfd));
 }
-
-// ---
-
-namespace
-{
-namespace is_valid_for_peers_helpers
-{
-
-/* isMartianAddr was written by Juliusz Chroboczek,
-   and is covered under the same license as third-party/dht/dht.c. */
-[[nodiscard]] auto is_martian_addr(tr_address const& addr, tr_peer_from from)
-{
-    auto const loopback_allowed = from == TR_PEER_FROM_INCOMING || from == TR_PEER_FROM_LPD || from == TR_PEER_FROM_RESUME;
-    return addr.is_ipv4_current_network() || addr.is_ipv6_unspecified() ||
-        (!loopback_allowed && (addr.is_ipv4_loopback() || addr.is_ipv6_loopback())) || addr.is_ipv4_multicast() ||
-        addr.is_ipv6_multicast();
-}
-
-} // namespace is_valid_for_peers_helpers
-} // namespace
 
 // --- tr_port
 
@@ -635,10 +648,12 @@ std::string tr_socket_address::display_name(tr_address const& address, tr_port p
 
 bool tr_socket_address::is_valid_for_peers(tr_peer_from from) const noexcept
 {
-    using namespace is_valid_for_peers_helpers;
+    // Loopback is only meaningful from a source that can name our own host.
+    auto const loopback_allowed = from == TR_PEER_FROM_INCOMING || from == TR_PEER_FROM_LPD || from == TR_PEER_FROM_RESUME;
 
     return is_valid() && !std::empty(port_) && !address_.is_ipv6_link_local() && !address_.is_ipv6_ipv4_mapped() &&
-        !is_martian_addr(address_, from);
+        !address_.is_ipv4_current_network() && !address_.is_ipv6_unspecified() && !address_.is_ipv4_multicast() &&
+        !address_.is_ipv6_multicast() && (loopback_allowed || (!address_.is_ipv4_loopback() && !address_.is_ipv6_loopback()));
 }
 
 std::optional<tr_socket_address> tr_socket_address::from_string(std::string_view sockaddr_sv)

@@ -74,7 +74,7 @@ jobs:
           get_changes tests      CMakeLists.txt cmake third-party libtransmission utils tests
           get_changes utils      CMakeLists.txt cmake third-party libtransmission utils
           get_changes web        CMakeLists.txt cmake web
-          get_changes ci-actions .github/workflows/actions.yml .github/actions
+          get_changes ci-actions .github/workflows/actions.yml .github/actions release
           cat "$GITHUB_OUTPUT"
 
   code-style:
@@ -424,31 +424,33 @@ jobs:
         with:
           arch: x64
           type: CoreDeps
+      - name: Setup Visual Studio Environment
+        uses: ./src/.github/actions/setup-vs-env-win32
+        with:
+          arch: x64
       - name: Configure
         run: |
-          Import-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64
-          cmake `
-            -S src `
-            -B obj `
-            -G Ninja `
-            -DCMAKE_BUILD_TYPE=Debug `
-            -DCMAKE_PREFIX_PATH="${Env:DEPS_PREFIX}" `
-            -DENABLE_TESTS=${{ needs.what-to-make.outputs.make-tests == 'true' && 'ON' || 'OFF' }} `
-            -DRUN_CLANG_TIDY=ON `
-            -DUSE_SYSTEM_DEFAULT=OFF
+          $CmakeArgs = @(
+            '-S src'
+            '-B obj'
+            '-G Ninja'
+            '-DCMAKE_BUILD_TYPE=Debug'
+            "-DCMAKE_PREFIX_PATH=`"$Env:DEPS_PREFIX`""
+            "-DENABLE_TESTS=${{ needs.what-to-make.outputs.make-tests == 'true' && 'ON' || 'OFF' }}"
+            '-DRUN_CLANG_TIDY=ON'
+            '-DUSE_SYSTEM_DEFAULT=OFF'
+          )
+          cmd /c "`"$Env:VCVARSALL`" $Env:VC_ARCH >nul && cmake $($CmakeArgs -join ' ')"
       - name: Make (Core)
         run: |
-          Import-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64
-          cmake --build obj --config Debug --target transmission 2>&1 | tee makelog
+          cmd /c "`"$Env:VCVARSALL`" $Env:VC_ARCH >nul && cmake --build obj --config Debug --target transmission" 2>&1 | tee makelog
       - name: Make (App)
         run: |
-          Import-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64
-          cmake --build obj --config Debug --target transmission-app 2>&1 | tee -a makelog
+          cmd /c "`"$Env:VCVARSALL`" $Env:VC_ARCH >nul && cmake --build obj --config Debug --target transmission-app" 2>&1 | tee -a makelog
       - name: Make (Tests)
         if: needs.what-to-make.outputs.make-tests == 'true'
         run: |
-          Import-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64
-          cmake --build obj --config Debug --target libtransmission-test 2>&1 | tee -a makelog
+          cmd /c "`"$Env:VCVARSALL`" $Env:VC_ARCH >nul && cmake --build obj --config Debug --target libtransmission-test" 2>&1 | tee -a makelog
       - name: Test for warnings
         run: |
           if (Select-String -Path makelog -Pattern 'warning:') { exit 1 }
@@ -579,8 +581,10 @@ jobs:
           set -ex
           apk update
           apk add \
-            ca-certificates \
             bash \
+            binutils \
+            build-base \
+            ca-certificates \
             clang \
             cmake \
             curl-dev \
@@ -682,31 +686,35 @@ jobs:
         with:
           arch: ${{ matrix.arch }}
           type: Deps
+      - name: Setup Visual Studio Environment
+        uses: ./.github/actions/setup-vs-env-win32
+        with:
+          arch: ${{ matrix.arch }}
       - name: Configure
         run: |
-          Import-VisualStudioVars -VisualStudioVersion 2022 -Architecture ${{ matrix.arch }}
-          cmake `
-            -S . `
-            -B obj `
-            -G Ninja `
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo `
-            -DCMAKE_INSTALL_PREFIX=pfx `
-            -DCMAKE_PREFIX_PATH="${Env:DEPS_PREFIX}" `
-            -DENABLE_CLI=${{ (needs.what-to-make.outputs.make-cli == 'true') && 'ON' || 'OFF' }} `
-            -DENABLE_DAEMON=${{ (needs.what-to-make.outputs.make-daemon == 'true' || needs.what-to-make.outputs.make-dist == 'true') && 'ON' || 'OFF' }} `
-            -DENABLE_GTK=OFF `
-            -DENABLE_MAC=OFF `
-            -DENABLE_QT=${{ (needs.what-to-make.outputs.make-dist == 'true' || needs.what-to-make.outputs.make-qt == 'true') && 'ON' || 'OFF' }} `
-            -DENABLE_TESTS=${{ (needs.what-to-make.outputs.make-tests == 'true') && 'ON' || 'OFF' }} `
-            -DENABLE_UTILS=ON `
-            -DREBUILD_WEB=${{ (needs.what-to-make.outputs.make-web == 'true') && 'ON' || 'OFF' }} `
-            -DENABLE_WERROR=ON `
-            -DRUN_CLANG_TIDY=OFF `
-            -DUSE_SYSTEM_DEFAULT=OFF
+          $CmakeArgs = @(
+            '-S .'
+            '-B obj'
+            '-G Ninja'
+            '-DCMAKE_BUILD_TYPE=RelWithDebInfo'
+            '-DCMAKE_INSTALL_PREFIX=pfx'
+            "-DCMAKE_PREFIX_PATH=`"$Env:DEPS_PREFIX`""
+            "-DENABLE_CLI=${{ (needs.what-to-make.outputs.make-cli == 'true') && 'ON' || 'OFF' }}"
+            "-DENABLE_DAEMON=${{ (needs.what-to-make.outputs.make-daemon == 'true' || needs.what-to-make.outputs.make-dist == 'true') && 'ON' || 'OFF' }}"
+            '-DENABLE_GTK=OFF'
+            '-DENABLE_MAC=OFF'
+            "-DENABLE_QT=${{ (needs.what-to-make.outputs.make-dist == 'true' || needs.what-to-make.outputs.make-qt == 'true') && 'ON' || 'OFF' }}"
+            "-DENABLE_TESTS=${{ (needs.what-to-make.outputs.make-tests == 'true') && 'ON' || 'OFF' }}"
+            '-DENABLE_UTILS=ON'
+            "-DREBUILD_WEB=${{ (needs.what-to-make.outputs.make-web == 'true') && 'ON' || 'OFF' }}"
+            '-DENABLE_WERROR=ON'
+            '-DRUN_CLANG_TIDY=OFF'
+            '-DUSE_SYSTEM_DEFAULT=OFF'
+          )
+          cmd /c "`"$Env:VCVARSALL`" $Env:VC_ARCH >nul && cmake $($CmakeArgs -join ' ')"
       - name: Make
         run: |
-          Import-VisualStudioVars -VisualStudioVersion 2022 -Architecture ${{ matrix.arch }}
-          cmake --build obj --config RelWithDebInfo
+          cmd /c "`"$Env:VCVARSALL`" $Env:VC_ARCH >nul && cmake --build obj --config RelWithDebInfo"
       - name: Test
         if: ${{ needs.what-to-make.outputs.make-tests == 'true' }}
         uses: ./.github/actions/run-tests
@@ -719,8 +727,7 @@ jobs:
       - name: Package
         if: ${{ needs.what-to-make.outputs.make-dist == 'true' || (needs.what-to-make.outputs.make-daemon == 'true' && needs.what-to-make.outputs.make-qt == 'true') }}
         run: |
-          Import-VisualStudioVars -VisualStudioVersion 2022 -Architecture ${{ matrix.arch }}
-          cmake --build obj --config RelWithDebInfo --target pack-msi
+          cmd /c "`"$Env:VCVARSALL`" $Env:VC_ARCH >nul && cmake --build obj --config RelWithDebInfo --target pack-msi"
       - uses: actions/upload-artifact@v6
         with:
           name: binaries-${{ github.job }}-${{ matrix.arch }}
@@ -863,18 +870,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - version: oldoldstable
+          # Debian _typically_ releases every 2 years, and each has 5 years of support+LTS.
+          # So the `oldstable` tag is the oldest Docker tag we can use without ever ending up
+          # testing on an EOL release, while not needing periodic updates to the workflow.
+          # Ref: https://wiki.debian.org/DebianReleases
+          - version: oldstable
             gtk: gtk3
             qt: qt5
-            use-legacy-packages: true
           - version: stable
             gtk: gtk4
             qt: qt6
-            use-legacy-packages: false
           - version: unstable
             gtk: gtk4
             qt: qt6
-            use-legacy-packages: false
     container:
       image: debian:${{ matrix.version }}-slim
     steps:
@@ -883,13 +891,6 @@ jobs:
           echo '${{ toJSON(needs) }}'
           echo '${{ toJSON(runner) }}'
           cat /etc/os-release
-      - name: Warn if oldoldstable moved past Debian 11
-        if: ${{ matrix.version == 'oldoldstable' }}
-        run: |
-          . /etc/os-release
-          if [ "$VERSION_ID" != '11' ]; then
-            echo "::warning title=Debian oldoldstable changed::debian:oldoldstable currently resolves to Debian $VERSION_ID. Consider removing matrix.use-legacy-packages if legacy package workarounds are no longer needed."
-          fi
       - name: Get Composite Actions
         uses: actions/checkout@v6
         with:
@@ -916,7 +917,7 @@ jobs:
         run: mkdir src && tar xf transmission*.tar.* -C src --strip-components 1
       - name: Configure
         run: |
-          set -- \
+          cmake \
             -S src \
             -B obj \
             -G Ninja \
@@ -939,15 +940,6 @@ jobs:
             -DUSE_SYSTEM_SMALL=OFF \
             -DUSE_SYSTEM_UTP=OFF \
             -DUSE_SYSTEM_WIDE_INTEGER=OFF
-
-          if [ '${{ matrix.use-legacy-packages }}' = 'true' ]; then
-            set -- "$@" \
-              -DUSE_SYSTEM_FAST_FLOAT=OFF \
-              -DUSE_SYSTEM_FMT=OFF \
-              -DUSE_SYSTEM_UTF8CPP=OFF
-          fi
-
-          cmake "$@"
       - name: Build
         run: cmake --build obj --config RelWithDebInfo
       - name: Test
@@ -1151,7 +1143,7 @@ jobs:
         gradle-version: 8.13
 
     - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
+      uses: android-actions/setup-android@v4
 
     - name: Install NDK
       run: sdkmanager "ndk;27.3.13750724"
@@ -1581,6 +1573,16 @@ jobs:
             uname -a
             export PATH="/usr/pkg/bin:/usr/pkg/sbin${PATH:+:${PATH}}"
             export PKG_PATH="https://cdn.NetBSD.org/pub/pkgsrc/packages/NetBSD/`uname -p`/`uname -r`/All"
+            # cairo, dbus, gtkmm4 and qt6-qtbase check for X11 shared libraries
+            # as they install, so the sets have to go in before pkg_add adds
+            # those packages.
+            # curl is added first because the sets are fetched with it.
+            if [ '${{ needs.what-to-make.outputs.make-gtk }}' = 'true' ] || [ '${{ needs.what-to-make.outputs.make-qt }}' = 'true' ]; then
+              /usr/sbin/pkg_add -u curl
+              for set in xbase xcomp; do
+                curl -sL "https://cdn.netbsd.org/pub/NetBSD/NetBSD-`uname -r`/amd64/binary/sets/$set.tar.xz" | tar xJpf - -C /
+              done
+            fi
             /usr/sbin/pkg_add -u \
               curl \
               cmake \
@@ -1593,16 +1595,10 @@ jobs:
               libpsl \
               miniupnpc \
               ninja-build \
-              `[ '${{ needs.what-to-make.outputs.make-web }}' = 'true' ] && echo nodejs` \
               pkgconf \
               `[ '${{ needs.what-to-make.outputs.make-qt }}' = 'true' ] && echo qt6-qtsvg qt6-qttools` \
               rapidjson \
               utf8-cpp
-            if [ '${{ needs.what-to-make.outputs.make-gtk }}' = 'true' ] || [ '${{ needs.what-to-make.outputs.make-qt }}' = 'true' ]; then
-              for set in xbase xcomp; do
-                curl -sL "https://cdn.netbsd.org/pub/NetBSD/NetBSD-`uname -r`/amd64/binary/sets/$set.tar.xz" | tar xJpf - -C /
-              done
-            fi
           run: |
             set -ex
             export PATH="/usr/pkg/bin:/usr/pkg/sbin${PATH:+:${PATH}}"
@@ -1620,7 +1616,7 @@ jobs:
               -DENABLE_QT=${{ (needs.what-to-make.outputs.make-qt == 'true') && 'ON' || 'OFF' }} \
               -DENABLE_TESTS=${{ (needs.what-to-make.outputs.make-tests == 'true') && 'ON' || 'OFF' }} \
               -DENABLE_UTILS=${{ (needs.what-to-make.outputs.make-utils == 'true') && 'ON' || 'OFF' }} \
-              -DREBUILD_WEB=${{ (needs.what-to-make.outputs.make-web == 'true') && 'ON' || 'OFF' }} \
+              -DREBUILD_WEB=OFF `# nodejs is not packaged in NetBSD; the source tarball ships prebuilt web assets` \
               -DENABLE_WERROR=ON \
               -DRUN_CLANG_TIDY=OFF \
               -DUSE_SYSTEM_DEFAULT=ON \

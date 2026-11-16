@@ -86,6 +86,12 @@ protected:
             return {};
         }
 
+        [[nodiscard]] bool allows_shared_udp(tr_sha1_digest_t const& /*info_hash*/, std::string_view /*bind_interface*/)
+            const override
+        {
+            return allows_shared_udp_;
+        }
+
         // Mock DNS lookup that only resolves localhost
         [[nodiscard]] std::optional<tr_socket_address> dns_lookup(
             tr_address_type const ip_protocol,
@@ -153,6 +159,8 @@ protected:
         };
 
         std::deque<Sent> sent_;
+
+        bool allows_shared_udp_ = true;
 
         std::unique_ptr<event_base, void (*)(event_base*)> const event_base_;
     };
@@ -454,6 +462,34 @@ TEST_F(AnnouncerUdpTest, canScrape)
     expectEqual(request, info_hashes);
 }
 
+TEST_F(AnnouncerUdpTest, failsQueuedRequestThatMayNoLongerUseTheSharedSocket)
+{
+    auto mediator = MockMediator{};
+    auto announcer = tr_announcer_udp::create(mediator);
+    auto upkeep_timer = createUpkeepTimer(mediator, announcer);
+
+    // tell announcer to scrape
+    auto [request, expected_response] = buildSimpleScrapeRequestAndResponse();
+    auto response = std::optional<tr_scrape_response>{};
+    announcer->scrape(request, [&response](tr_scrape_response const& resp) { response = resp; });
+
+    // The scrape request waits while the announcer connects to the tracker.
+    auto from = sockaddr_storage{};
+    auto* const from_ptr = reinterpret_cast<struct sockaddr*>(&from);
+    auto fromlen = socklen_t{};
+    auto const connect_transaction_id = parseConnectionRequest(waitForAnnouncerToSendMessage(mediator, from_ptr, &fromlen));
+
+    // The torrent's bind_interface stops matching the shared socket before the tracker responds.
+    mediator.allows_shared_udp_ = false;
+    (void)sendConnectionResponse(*announcer, connect_transaction_id, from_ptr, fromlen);
+
+    // The scrape fails instead of being sent.
+    EXPECT_TRUE(tr::test::waitFor(mediator.eventBase(), [&response]() { return response.has_value(); }));
+    ASSERT_TRUE(response.has_value());
+    EXPECT_FALSE(std::empty(response->errmsg));
+    EXPECT_TRUE(std::empty(mediator.sent_));
+}
+
 TEST_F(AnnouncerUdpTest, canDestructCleanlyEvenWhenBusy)
 {
     auto mediator = MockMediator{};
@@ -711,6 +747,7 @@ TEST_F(AnnouncerUdpTest, canAnnounceIPv4)
         .peer_id = tr_peerIdInit(),
         .info_hash = tr_rand_obj<tr_sha1_digest_t>(),
         .log_name = {},
+        .bind_interface = {},
     };
 
     auto const expected_response = tr_announce_response{
@@ -797,6 +834,7 @@ TEST_F(AnnouncerUdpTest, canAnnounceIPv6)
         .peer_id = tr_peerIdInit(),
         .info_hash = tr_rand_obj<tr_sha1_digest_t>(),
         .log_name = {},
+        .bind_interface = {},
     };
 
     auto const expected_response = tr_announce_response{

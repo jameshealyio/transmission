@@ -60,7 +60,7 @@ Here is a sample of the three basic types: respectively Boolean, Number and Stri
  * **speed_limit_down_enabled:** Boolean (default = false)
  * **speed_limit_up:** Number (kB/s, default = 100)
  * **speed_limit_up_enabled:** Boolean (default = false)
- * **upload_slots_per_torrent:** Number (default = 14)
+ * **upload_slots_per_torrent:** Number (default = 8)
 
 #### [Blocklists](./Blocklists.md)
 
@@ -86,7 +86,7 @@ Here is a sample of the three basic types: respectively Boolean, Number and Stri
    _Note: transmission-daemon only._
 
 #### Misc
- * **cache_size_mib:** Number (default = 4), in MiB, to allocate for Transmission's memory cache. The cache is used to help batch disk IO together, so increasing the cache size can be used to reduce the number of disk reads and writes. The value is the total available to the Transmission instance. Set it to the smallest value tolerable by the random access performance of your storage medium to minimize data loss in case Transmission quit unexpectedly. Setting this to 0 bypasses the cache, which may be useful if your filesystem already has a cache layer that aggregates transactions. Pieces are guaranteed to be written to filesystem if sequential download is enabled. Otherwise, data might still be in cache only.
+ * **cache_size_mib:** Number (default = 4) ***DEPRECATED***, Value is ignored. See [#2462](https://github.com/transmission/transmission/issues/2462)
  * **default_trackers:** String (default = "") A list of double-newline separated tracker announce URLs. These are used for all torrents in addition to the per torrent trackers specified in the torrent file. If a tracker is only meant to be a backup, it should be separated from its main tracker by a single newline character. If a tracker should be used additionally to another tracker it should be separated by two newlines. (e.g. "udp://tracker.example.invalid:1337/announce\n\nudp://tracker.another-example.invalid:6969/announce\nhttps://backup-tracker.another-example.invalid:443/announce\n\nudp://tracker.yet-another-example.invalid:1337/announce", in this case tracker.example.invalid, tracker.another-example.invalid and tracker.yet-another-example.invalid would be used as trackers and backup-tracker.another-example.invalid as backup in case tracker.another-example.invalid is unreachable.
  * **dht_enabled:** Boolean (default = true) Enable [Distributed Hash Table (DHT)](https://wiki.theory.org/BitTorrentSpecification#Distributed_Hash_Table).
  * **encryption:** String ("allowed" = Prefer unencrypted connections, "preferred" = Prefer encrypted connections, "required" = Require encrypted connections; default = "preferred") [Encryption](https://wiki.vuze.com/w/Message_Stream_Encryption) preference. Encryption may help get around some ISP filtering, but at the cost of slightly higher CPU use.
@@ -116,7 +116,7 @@ Here is a sample of the three basic types: respectively Boolean, Number and Stri
 #### Peers
  * **bind_address_ipv4:** String (default = "") Where to listen for peer connections. When no valid IPv4 address is provided, Transmission will bind to "0.0.0.0".
  * **bind_address_ipv6:** String (default = "") Where to listen for peer connections. When no valid IPv6 address is provided, Transmission will try to bind to your default global IPv6 address. If that didn't work, then Transmission will bind to "::".
- * **bind_interface:** String (default = "") Network interface name to route peer, tracker, DHT, LPD, and port-mapping traffic through on supported platforms, such as `utun4` on macOS. Empty means normal OS routing. If a configured interface is unavailable, Transmission fails closed instead of falling back to the default route.
+ * **bind_interface:** String (default = "") Name of the network interface that peer, tracker, web seed, DHT, uTP, LPD and port-mapping traffic must use, such as `en0` or `utun4` on macOS and `eth0` or `wg0` on Linux. Transmission scopes its sockets to the interface (`IP_BOUND_IF`/`IPV6_BOUND_IF` on macOS, `SO_BINDTODEVICE` on Linux), so traffic stays on it even when another interface, such as a VPN, holds the default route. Empty means normal OS routing. If the interface is missing, Transmission fails closed instead of falling back to the default route; sockets are bound when the session starts or the setting changes, so an interface that appears later is used only after a restart or a settings change. Supported on macOS and Linux; on Linux kernels older than 5.7 this needs `CAP_NET_RAW`. On other platforms a non-empty value stops peer, tracker, web seed, DHT, LPD and port-mapping traffic. NAT-PMP is used only when the default gateway is reached through the interface; UPnP discovery is sent on the interface, but its port-mapping requests to the router are not bound. Hostname lookups use the system resolver and are not bound to the interface.
  * **peer_congestion_algorithm:** String. This is documented on https://www.pps.jussieu.fr/~jch/software/bittorrent/tcp-congestion-control.html.
  * **peer_limit_global:** Number (default = 200)
  * **peer_limit_per_torrent:** Number (default = 50)

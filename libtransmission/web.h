@@ -105,6 +105,11 @@ public:
 
     [[nodiscard]] bool is_idle() const noexcept;
 
+    // Call this after Mediator::bind_interface() changes, from the thread that changed it.
+    // Every running request is ended and every connection is closed, and requests that
+    // were queued to use the previous value are not sent. Their callers see a failed request.
+    void on_bind_interface_changed();
+
     // If you want to give running tasks a chance to finish,
     // call startShutdown() before destroying the tr_web object.
     // Deleting the object will cancel all of its tasks.

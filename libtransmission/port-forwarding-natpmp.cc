@@ -5,11 +5,15 @@
 
 #include <array>
 #include <cerrno>
+#include <optional>
+#include <string>
+#include <string_view>
 
 #ifdef _WIN32
 #include <ws2tcpip.h>
 #else
-#include <sys/socket.h> // AF_INET
+#include <net/if.h> // if_nametoindex()
+#include <sys/socket.h> // AF_INET, getsockname()
 #endif
 
 #include <event2/util.h> /* evutil_inet_ntop() */
@@ -52,7 +56,54 @@ void log_val(char const* func, int ret)
                 tr_strerror(errno)));
     }
 }
+
+// initnatpmp() connects its socket to the default gateway, so the socket's
+// local address shows which interface the system routes NAT-PMP through.
+[[nodiscard]] bool is_gateway_route_on_interface(
+    [[maybe_unused]] natpmp_t const& natpmp,
+    [[maybe_unused]] std::string_view const bind_interface)
+{
+#ifdef _WIN32
+    // interface binding is not supported on Windows
+    return false;
+#else
+    auto ss = sockaddr_storage{};
+    auto sslen = socklen_t{ sizeof(ss) };
+    if (getsockname(natpmp.s, reinterpret_cast<sockaddr*>(&ss), &sslen) != 0)
+    {
+        return false;
+    }
+
+    auto const local = tr_socket_address::from_sockaddr(reinterpret_cast<sockaddr const*>(&ss));
+    auto const local_index = local ? local->address().to_interface_index() : std::nullopt;
+    return local_index && *local_index == if_nametoindex(std::string{ bind_interface }.c_str());
+#endif
+}
 } // namespace
+
+bool tr_natpmp::scope_to_bind_interface()
+{
+    if (std::empty(bind_interface_))
+    {
+        return true;
+    }
+
+    if (!tr_netSetSocketInterface(natpmp_.s, TR_AF_INET, bind_interface_))
+    {
+        return false;
+    }
+
+    // The socket is now pinned to the interface, but it was connected to the default gateway
+    // before that. Only use a gateway whose route already leaves through the bound interface:
+    // anything else would send NAT-PMP requests for another network into this one.
+    if (!is_gateway_route_on_interface(natpmp_, bind_interface_))
+    {
+        tr_logAddDebug(fmt::format("Not using NAT-PMP: the default gateway is not on interface '{}'", bind_interface_));
+        return false;
+    }
+
+    return true;
+}
 
 bool tr_natpmp::canSendCommand() const
 {
@@ -70,8 +121,17 @@ tr_natpmp::PulseResult tr_natpmp::pulse(tr_port local_port, bool is_enabled)
     {
         int val = initnatpmp(&natpmp_, 0, 0);
         log_val("initnatpmp", val);
-        val = sendpublicaddressrequest(&natpmp_);
-        log_val("sendpublicaddressrequest", val);
+        if (val >= 0 && !scope_to_bind_interface())
+        {
+            closenatpmp(&natpmp_);
+            natpmp_.s = static_cast<decltype(natpmp_.s)>(TR_BAD_SOCKET);
+            val = NATPMP_ERR_SOCKETERROR;
+        }
+        if (val >= 0)
+        {
+            val = sendpublicaddressrequest(&natpmp_);
+            log_val("sendpublicaddressrequest", val);
+        }
         state_ = val < 0 ? State::Err : State::RecvPub;
         has_discovered_ = true;
         setCommandTime();

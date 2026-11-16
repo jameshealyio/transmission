@@ -221,10 +221,7 @@ NSDictionary<NSString*, NSDictionary<NSString*, NSString*>*>* TRVPNServiceInfoBy
     return serviceInfo;
 }
 
-BOOL TRVPNServiceInfoMatchesIdentity(
-    NSDictionary<NSString*, NSString*>* serviceInfo,
-    NSString* expectedServiceName,
-    NSString* expectedProviderIdentifier)
+BOOL TRVPNServiceInfoMatchesIdentity(NSDictionary<NSString*, NSString*>* serviceInfo, NSString* expectedServiceName, NSString* expectedProviderIdentifier)
 {
     if (expectedServiceName.length > 0)
     {

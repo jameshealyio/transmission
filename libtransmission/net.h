@@ -61,6 +61,11 @@ using tr_socket_t = int;
 #define set_sockerrno(save) (sockerrno) = (save)
 #endif
 
+[[nodiscard]] constexpr bool is_valid_socket(tr_socket_t s) noexcept
+{
+    return s != static_cast<tr_socket_t>(TR_BAD_SOCKET);
+}
+
 #include "libtransmission/tr-assert.h"
 #include "libtransmission/types.h"
 #include "libtransmission/utils.h" // for tr_compare_3way()
@@ -519,6 +524,10 @@ struct tr_session;
 [[nodiscard]] bool tr_net_interface_is_default(std::string_view bind_interface);
 
 [[nodiscard]] std::string_view tr_net_effective_bind_interface(std::string_view bind_interface);
+
+// Index of the interface that bind_interface names, if this platform can bind sockets to it.
+// Empty for the default route, a missing interface, or a platform without interface binding.
+[[nodiscard]] std::optional<unsigned> tr_net_bind_interface_index(std::string_view bind_interface);
 
 [[nodiscard]] bool tr_netSetSocketInterface(
     tr_socket_t sock,

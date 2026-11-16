@@ -42,10 +42,10 @@
 #include "libtransmission/announcer.h"
 #include "libtransmission/bandwidth.h"
 #include "libtransmission/blocklist.h"
+#include "libtransmission/config-dir-lock.h"
 #include "libtransmission/interned-string.h"
 #include "libtransmission/ip-cache.h"
 #include "libtransmission/local-data.h"
-#include "libtransmission/log.h" // for tr_log_level
 #include "libtransmission/net.h" // for tr_port, tr_tos_t
 #include "libtransmission/open-files.h"
 #include "libtransmission/platform.h"
@@ -163,6 +163,11 @@ private:
             }
 
             return tr_address::from_string(session_.announceIP());
+        }
+
+        [[nodiscard]] bool allows_shared_udp(tr_sha1_digest_t const& info_hash, std::string_view bind_interface) const override
+        {
+            return session_.torrent_uses_session_interface(info_hash, bind_interface);
         }
 
     private:
@@ -492,6 +497,12 @@ public:
         return config_dir_;
     }
 
+    // See tr_sessionOwnsConfigDir().
+    [[nodiscard]] bool ownsConfigDir() const noexcept
+    {
+        return config_dir_lock_.is_held();
+    }
+
     [[nodiscard]] constexpr auto const& torrentDir() const noexcept
     {
         return torrent_dir_;
@@ -623,6 +634,11 @@ public:
     {
         return settings().bind_interface;
     }
+
+    // Whether a torrent's traffic may use the session's shared sockets, which carry only the
+    // session's bind_interface. `bind_interface` is the torrent's own setting as the caller
+    // last saw it, and decides for a torrent that has since been removed.
+    [[nodiscard]] bool torrent_uses_session_interface(tr_sha1_digest_t const& info_hash, std::string_view bind_interface) const;
 
     [[nodiscard]] constexpr auto const& peerCongestionAlgorithm() const noexcept
     {
@@ -1231,6 +1247,10 @@ private:
     /// const fields
 
     std::string const config_dir_;
+
+    // Held for the session's lifetime. See tr_sessionOwnsConfigDir().
+    tr_config_dir_lock const config_dir_lock_;
+
     std::string const resume_dir_;
     std::string const torrent_dir_;
     std::string const blocklist_dir_;
